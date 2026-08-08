@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package product;
+
+option go_package = "go-ecom-admin/proto/product;productpb";
+
+// ProductService 是 product-service 对外暴露的 gRPC 契约，供 api-gateway 调用。
+service ProductService {
+  rpc GetProduct(GetProductRequest) returns (GetProductResponse);
+  rpc CreateProduct(CreateProductRequest) returns (CreateProductResponse);
+  rpc ListProducts(ListProductsRequest) returns (ListProductsResponse);
+}
+
+message GetProductRequest {
+  uint64 id = 1;
+}
+
+message GetProductResponse {
+  Product product = 1;
+}
+
+message CreateProductRequest {
+  string name = 1;
+  int64 price_cents = 2; // 价格用最小货币单位（分）存储和传输，避免浮点数误差
+  int32 stock = 3;
+}
+
+message CreateProductResponse {
+  Product product = 1;
+}
+
+message ListProductsRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+}
+
+message ListProductsResponse {
+  repeated Product products = 1;
+  int64 total = 2;
+}
+
+message Product {
+  uint64 id = 1;
+  string name = 2;
+  int64 price_cents = 3;
+  int32 stock = 4;
+  int64 created_at = 5;
+}

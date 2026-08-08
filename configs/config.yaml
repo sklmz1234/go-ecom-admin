@@ -1,0 +1,32 @@
+app:
+  name: go-ecom-admin
+  env: dev
+
+log:
+  level: info
+  encoding: console # 本地开发用 console 方便肉眼看；生产建议改成 json
+  output_paths:
+    - stdout
+
+mysql:
+  host: 127.0.0.1
+  port: 3306
+  user: root
+  password: root
+  db_name: ecom_admin
+  charset: utf8mb4
+  max_idle_conns: 10
+  max_open_conns: 100
+
+server:
+  api_gateway:
+    http_port: 8080
+  user_service:
+    grpc_port: 9001
+  product_service:
+    grpc_port: 9002
+
+# api-gateway 作为 gRPC 客户端时，下游服务的拨号地址。
+grpc_client:
+  user_service_addr: 127.0.0.1:9001
+  product_service_addr: 127.0.0.1:9002

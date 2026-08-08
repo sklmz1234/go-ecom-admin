@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+// package 与 go_package 分开声明：package 是 proto 命名空间（跨语言通用），
+// go_package 只影响生成的 Go 代码放在哪个 import path / 用什么包名。
+package user;
+
+option go_package = "go-ecom-admin/proto/user;userpb";
+
+// UserService 是 user-service 对外暴露的 gRPC 契约。
+// api-gateway 通过这份契约生成的客户端桩代码调用 user-service，
+// 两边永远不会引用对方的 internal 包，proto 就是唯一的耦合点。
+service UserService {
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+}
+
+message GetUserRequest {
+  uint64 id = 1;
+}
+
+message GetUserResponse {
+  User user = 1;
+}
+
+message CreateUserRequest {
+  string username = 1;
+  string email = 2;
+}
+
+message CreateUserResponse {
+  User user = 1;
+}
+
+// User 是 gRPC 传输用的消息类型，故意不直接复用 internal/user/model.User。
+// 数据库模型可以自由改字段（加索引、加内部字段）而不用担心破坏对外契约。
+message User {
+  uint64 id = 1;
+  string username = 2;
+  string email = 3;
+  int64 created_at = 4; // unix 秒，proto3 没有原生时间类型，用整数最简单也最少歧义
+}

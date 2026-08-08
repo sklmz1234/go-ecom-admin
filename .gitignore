@@ -1,0 +1,22 @@
+# IDE
+.idea/
+
+# Compiled binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/bin/
+/dist/
+*.test
+*.out
+coverage.*
+
+# Local env / secrets
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
