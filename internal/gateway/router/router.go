@@ -6,9 +6,13 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"go-ecom-admin/internal/gateway/handler"
+	"go-ecom-admin/internal/gateway/middleware"
 )
 
-func New(h *handler.Handler) *gin.Engine {
+// New 需要 jwtSecret 才能组装出鉴权中间件——路由表是唯一决定"哪些接口
+// 需要登录"的地方，所以中间件的接入点也放在这里，而不是让每个 handler
+// 自己判断要不要校验 token。
+func New(h *handler.Handler, jwtSecret string) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 
@@ -16,16 +20,26 @@ func New(h *handler.Handler) *gin.Engine {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
 
+	auth := middleware.Auth(jwtSecret)
+
 	api := r.Group("/api/v1")
 	{
+		// /auth 下的接口本身就是"证明你是谁"的入口，不能反过来要求已经登录。
+		authGroup := api.Group("/auth")
+		authGroup.POST("/register", h.Register)
+		authGroup.POST("/login", h.Login)
+
 		users := api.Group("/users")
 		users.GET("/:id", h.GetUser)
-		users.POST("", h.CreateUser)
 
+		// 商品的"读"保持公开（游客可浏览），"写"（新增/改/删）需要登录——
+		// 这是本阶段唯一的权限模型，还没有细到"哪个用户能改哪个商品"。
 		products := api.Group("/products")
 		products.GET("/:id", h.GetProduct)
-		products.POST("", h.CreateProduct)
 		products.GET("", h.ListProducts)
+		products.POST("", auth, h.CreateProduct)
+		products.PUT("/:id", auth, h.UpdateProduct)
+		products.DELETE("/:id", auth, h.DeleteProduct)
 	}
 
 	return r

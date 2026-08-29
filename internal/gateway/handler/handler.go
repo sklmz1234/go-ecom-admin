@@ -39,19 +39,34 @@ func (h *Handler) GetUser(c *gin.Context) {
 	c.JSON(http.StatusOK, user)
 }
 
-func (h *Handler) CreateUser(c *gin.Context) {
-	var req model.CreateUserRequest
+func (h *Handler) Register(c *gin.Context) {
+	var req model.RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	user, err := h.svc.CreateUser(c.Request.Context(), req)
+	user, err := h.svc.Register(c.Request.Context(), req)
 	if err != nil {
 		h.respondGRPCError(c, err)
 		return
 	}
 	c.JSON(http.StatusCreated, user)
+}
+
+func (h *Handler) Login(c *gin.Context) {
+	var req model.LoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	resp, err := h.svc.Login(c.Request.Context(), req)
+	if err != nil {
+		h.respondGRPCError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *Handler) GetProduct(c *gin.Context) {
@@ -97,6 +112,41 @@ func (h *Handler) ListProducts(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+func (h *Handler) UpdateProduct(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	var req model.UpdateProductRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	product, err := h.svc.UpdateProduct(c.Request.Context(), id, req)
+	if err != nil {
+		h.respondGRPCError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, product)
+}
+
+func (h *Handler) DeleteProduct(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	if err := h.svc.DeleteProduct(c.Request.Context(), id); err != nil {
+		h.respondGRPCError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
 
 // respondGRPCError 把下游 gRPC 服务返回的 status error 翻译成 HTTP 状态码。

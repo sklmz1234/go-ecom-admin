@@ -47,16 +47,16 @@ func main() {
 	}
 	defer log.Sync()
 
-	var repo repository.Repository
+	// 和 user-service 一样：现在依赖真实数据（库存/价格都要能改），
+	// 连不上数据库直接 Fatal，不再走"scaffold mode"的优雅降级。
 	db, err := gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{})
 	if err != nil {
-		log.Warn("failed to connect to MySQL, starting without a working repository (scaffold mode)", zap.Error(err))
-	} else {
-		if err := db.AutoMigrate(&model.Product{}); err != nil {
-			log.Warn("auto migrate failed", zap.Error(err))
-		}
-		repo = repository.NewGormRepository(db)
+		log.Fatal("failed to connect to MySQL", zap.Error(err))
 	}
+	if err := db.AutoMigrate(&model.Product{}); err != nil {
+		log.Fatal("auto migrate failed", zap.Error(err))
+	}
+	repo := repository.NewGormRepository(db)
 
 	svc := service.New(repo, log)
 

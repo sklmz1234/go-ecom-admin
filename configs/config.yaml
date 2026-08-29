@@ -18,6 +18,12 @@ mysql:
   max_idle_conns: 10
   max_open_conns: 100
 
+# 开发环境用的默认 secret，生产环境务必通过 JWT_SECRET 环境变量覆盖
+# （Viper 的 AutomaticEnv 会把 "." 换成 "_"，jwt.secret -> JWT_SECRET）。
+jwt:
+  secret: dev-only-change-me-in-production
+  expire_hours: 24
+
 server:
   api_gateway:
     http_port: 8080

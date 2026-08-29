@@ -16,6 +16,8 @@ import (
 type Repository interface {
 	Create(ctx context.Context, p *model.Product) error
 	GetByID(ctx context.Context, id uint64) (*model.Product, error)
+	Update(ctx context.Context, p *model.Product) error
+	Delete(ctx context.Context, id uint64) error
 	List(ctx context.Context, page, pageSize int) ([]*model.Product, int64, error)
 }
 
@@ -43,6 +45,36 @@ func (r *gormRepository) GetByID(ctx context.Context, id uint64) (*model.Product
 		return nil, apperrors.Internal("failed to query product", err)
 	}
 	return &p, nil
+}
+
+// Update 用 RowsAffected 判断"有没有更新到东西"，而不是先 GetByID 查一遍
+// 存在性再 Save——一次 UPDATE 语句就能同时完成"存在性检查 + 更新"，省一次
+// 数据库往返，且天然没有 TOCTOU 竞态（检查和更新之间数据被删掉的问题）。
+func (r *gormRepository) Update(ctx context.Context, p *model.Product) error {
+	result := r.db.WithContext(ctx).Model(&model.Product{}).Where("id = ?", p.ID).Updates(map[string]any{
+		"name":        p.Name,
+		"price_cents": p.PriceCents,
+		"stock":       p.Stock,
+	})
+	if result.Error != nil {
+		return apperrors.Internal("failed to update product", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return apperrors.NotFound("product not found", nil)
+	}
+	return nil
+}
+
+// Delete 同样靠 RowsAffected 判断目标是否存在，理由和 Update 一致。
+func (r *gormRepository) Delete(ctx context.Context, id uint64) error {
+	result := r.db.WithContext(ctx).Delete(&model.Product{}, id)
+	if result.Error != nil {
+		return apperrors.Internal("failed to delete product", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return apperrors.NotFound("product not found", nil)
+	}
+	return nil
 }
 
 // List 用最朴素的 offset/limit 分页——阶段 1 数据量小，等以后接入真实业务
