@@ -20,6 +20,7 @@ type Config struct {
 	App        AppConfig        `mapstructure:"app"`
 	Log        LogConfig        `mapstructure:"log"`
 	MySQL      MySQLConfig      `mapstructure:"mysql"`
+	JWT        JWTConfig        `mapstructure:"jwt"`
 	Server     ServerConfig     `mapstructure:"server"`
 	GRPCClient GRPCClientConfig `mapstructure:"grpc_client"`
 }
@@ -52,6 +53,15 @@ type MySQLConfig struct {
 func (m MySQLConfig) DSN() string {
 	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=%s&parseTime=True&loc=Local",
 		m.User, m.Password, m.Host, m.Port, m.DBName, m.Charset)
+}
+
+// JWTConfig 是 user-service（签发）和 api-gateway（校验）共用的一份配置——
+// 两个服务必须用同一个 secret，否则 gateway 校验不了 user-service 签的 token。
+// Secret 只在 configs/config.yaml 里放一个开发用的默认值，生产环境要靠
+// Viper 的环境变量覆盖机制（JWT_SECRET）换成真正的密钥，不能把生产密钥提交进仓库。
+type JWTConfig struct {
+	Secret      string `mapstructure:"secret"`
+	ExpireHours int    `mapstructure:"expire_hours"`
 }
 
 // ServerConfig 把三个入口各自的监听端口放在一起，方便一份 config.yaml

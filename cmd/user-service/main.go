@@ -46,23 +46,19 @@ func main() {
 	}
 	defer log.Sync()
 
-	// 阶段 1（项目初始化）允许在没有本地 MySQL 的情况下把服务跑起来：
-	// 连不上就打一条 warn 日志继续、repo 留空，而不是 os.Exit —— 这样
-	// `go run` 不会因为环境里还没有数据库就报错退出。到了真正接业务逻辑
-	// 的阶段，这里应该改成连接失败就 Fatal，因为一个没有 DB 的 user-service
-	// 毫无意义。
-	var repo repository.Repository
+	// 注册、登录和密码校验都依赖持久化用户数据，因此服务启动时必须先确认
+	// 数据库连接和表结构准备完成。初始化失败时立即结束进程，避免服务在无法
+	// 正常处理请求的状态下继续监听，直到请求到来后才暴露数据库不可用的问题。
 	db, err := gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{})
 	if err != nil {
-		log.Warn("failed to connect to MySQL, starting without a working repository (scaffold mode)", zap.Error(err))
-	} else {
-		if err := db.AutoMigrate(&model.User{}); err != nil {
-			log.Warn("auto migrate failed", zap.Error(err))
-		}
-		repo = repository.NewGormRepository(db)
+		log.Fatal("failed to connect to MySQL", zap.Error(err))
 	}
+	if err := db.AutoMigrate(&model.User{}); err != nil {
+		log.Fatal("auto migrate failed", zap.Error(err))
+	}
+	repo := repository.NewGormRepository(db)
 
-	svc := service.New(repo, log)
+	svc := service.New(repo, log, cfg.JWT.Secret, cfg.JWT.ExpireHours)
 
 	grpcServer := grpc.NewServer()
 	userpb.RegisterUserServiceServer(grpcServer, svc)

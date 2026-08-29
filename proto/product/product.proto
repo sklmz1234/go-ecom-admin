@@ -8,6 +8,8 @@ option go_package = "go-ecom-admin/proto/product;productpb";
 service ProductService {
   rpc GetProduct(GetProductRequest) returns (GetProductResponse);
   rpc CreateProduct(CreateProductRequest) returns (CreateProductResponse);
+  rpc UpdateProduct(UpdateProductRequest) returns (UpdateProductResponse);
+  rpc DeleteProduct(DeleteProductRequest) returns (DeleteProductResponse);
   rpc ListProducts(ListProductsRequest) returns (ListProductsResponse);
 }
 
@@ -28,6 +30,27 @@ message CreateProductRequest {
 message CreateProductResponse {
   Product product = 1;
 }
+
+// UpdateProductRequest 是整体替换语义（PUT），不是 PATCH 式的局部更新——
+// 阶段 2 的商品字段少，局部更新（哪些字段传了才更新）带来的复杂度不值得，
+// 客户端每次都传完整字段更简单、更不容易出现"忘记传导致字段被静默清空"的问题。
+message UpdateProductRequest {
+  uint64 id = 1;
+  string name = 2;
+  int64 price_cents = 3;
+  int32 stock = 4;
+}
+
+message UpdateProductResponse {
+  Product product = 1;
+}
+
+message DeleteProductRequest {
+  uint64 id = 1;
+}
+
+// 空响应：删除成功与否用 gRPC status 表达（NotFound / OK），不需要在 body 里再放一个 success 字段。
+message DeleteProductResponse {}
 
 message ListProductsRequest {
   int32 page = 1;

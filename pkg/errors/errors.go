@@ -24,6 +24,7 @@ const (
 	CodeInvalidArgument
 	CodeAlreadyExists
 	CodeInternal
+	CodeUnauthorized
 )
 
 // AppError 是本项目统一的错误载体：Code 供上层做分支判断，
@@ -66,6 +67,14 @@ func Internal(message string, cause error) *AppError {
 	return New(CodeInternal, message, cause)
 }
 
+// Unauthorized 用于「未认证/认证失败」：JWT 缺失、过期、签名不对，或者
+// 登录时用户名/密码不匹配。故意不区分"用户不存在"和"密码错误"，调用方
+// 传的 message 也应该保持模糊（例如统一用 "invalid username or password"），
+// 避免攻击者通过错误信息差异枚举出哪些用户名是注册过的。
+func Unauthorized(message string, cause error) *AppError {
+	return New(CodeUnauthorized, message, cause)
+}
+
 // ToGRPCStatus 供 user-service / product-service 的 gRPC handler 使用，
 // 把内部 AppError 转换成客户端能识别的标准 gRPC status。
 func ToGRPCStatus(err error) error {
@@ -85,6 +94,8 @@ func ToGRPCStatus(err error) error {
 		return status.Error(codes.InvalidArgument, appErr.Message)
 	case CodeAlreadyExists:
 		return status.Error(codes.AlreadyExists, appErr.Message)
+	case CodeUnauthorized:
+		return status.Error(codes.Unauthenticated, appErr.Message)
 	default:
 		// 不把 appErr.Err（可能包含 SQL 语句/驱动报错）透传给客户端，
 		// 完整信息已经在 service 层落日志，这里只暴露安全的提示文案。
@@ -108,6 +119,8 @@ func ToHTTPStatus(err error) (int, string) {
 		return http.StatusBadRequest, st.Message()
 	case codes.AlreadyExists:
 		return http.StatusConflict, st.Message()
+	case codes.Unauthenticated:
+		return http.StatusUnauthorized, st.Message()
 	case codes.OK:
 		return http.StatusOK, ""
 	default:

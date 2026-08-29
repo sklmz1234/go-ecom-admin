@@ -29,12 +29,20 @@ func (s *Service) GetUser(ctx context.Context, id uint64) (*model.UserDTO, error
 	return userToDTO(u), nil
 }
 
-func (s *Service) CreateUser(ctx context.Context, req model.CreateUserRequest) (*model.UserDTO, error) {
-	u, err := s.userClient.CreateUser(ctx, req.Username, req.Email)
+func (s *Service) Register(ctx context.Context, req model.RegisterRequest) (*model.UserDTO, error) {
+	u, err := s.userClient.Register(ctx, req.Username, req.Email, req.Password)
 	if err != nil {
 		return nil, err
 	}
 	return userToDTO(u), nil
+}
+
+func (s *Service) Login(ctx context.Context, req model.LoginRequest) (*model.LoginResponseDTO, error) {
+	token, u, err := s.userClient.Login(ctx, req.Username, req.Password)
+	if err != nil {
+		return nil, err
+	}
+	return &model.LoginResponseDTO{Token: token, User: userToDTO(u)}, nil
 }
 
 func (s *Service) GetProduct(ctx context.Context, id uint64) (*model.ProductDTO, error) {
@@ -54,6 +62,20 @@ func (s *Service) CreateProduct(ctx context.Context, req model.CreateProductRequ
 		return nil, err
 	}
 	return productToDTO(p), nil
+}
+
+func (s *Service) UpdateProduct(ctx context.Context, id uint64, req model.UpdateProductRequest) (*model.ProductDTO, error) {
+	priceCents := int64(req.PriceYuan*100 + 0.5)
+
+	p, err := s.productClient.UpdateProduct(ctx, id, req.Name, priceCents, req.Stock)
+	if err != nil {
+		return nil, err
+	}
+	return productToDTO(p), nil
+}
+
+func (s *Service) DeleteProduct(ctx context.Context, id uint64) error {
+	return s.productClient.DeleteProduct(ctx, id)
 }
 
 func (s *Service) ListProducts(ctx context.Context, req model.ListProductsRequest) (*model.ListProductsResponse, error) {

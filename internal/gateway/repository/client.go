@@ -48,15 +48,28 @@ func (c *UserClient) GetUser(ctx context.Context, id uint64) (*userpb.User, erro
 	return resp.GetUser(), nil
 }
 
-func (c *UserClient) CreateUser(ctx context.Context, username, email string) (*userpb.User, error) {
+func (c *UserClient) Register(ctx context.Context, username, email, password string) (*userpb.User, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
 	defer cancel()
 
-	resp, err := c.client.CreateUser(ctx, &userpb.CreateUserRequest{Username: username, Email: email})
+	resp, err := c.client.Register(ctx, &userpb.RegisterRequest{Username: username, Email: email, Password: password})
 	if err != nil {
 		return nil, err
 	}
 	return resp.GetUser(), nil
+}
+
+// Login 返回 (token, user)，token 的生成在 user-service 完成——gateway
+// 只负责透传，不知道也不需要知道签名算法/密钥。
+func (c *UserClient) Login(ctx context.Context, username, password string) (string, *userpb.User, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
+	defer cancel()
+
+	resp, err := c.client.Login(ctx, &userpb.LoginRequest{Username: username, Password: password})
+	if err != nil {
+		return "", nil, err
+	}
+	return resp.GetToken(), resp.GetUser(), nil
 }
 
 // ProductClient 封装对 product-service 的 gRPC 调用。
@@ -94,6 +107,27 @@ func (c *ProductClient) CreateProduct(ctx context.Context, name string, priceCen
 		return nil, err
 	}
 	return resp.GetProduct(), nil
+}
+
+func (c *ProductClient) UpdateProduct(ctx context.Context, id uint64, name string, priceCents int64, stock int32) (*productpb.Product, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
+	defer cancel()
+
+	resp, err := c.client.UpdateProduct(ctx, &productpb.UpdateProductRequest{
+		Id: id, Name: name, PriceCents: priceCents, Stock: stock,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetProduct(), nil
+}
+
+func (c *ProductClient) DeleteProduct(ctx context.Context, id uint64) error {
+	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
+	defer cancel()
+
+	_, err := c.client.DeleteProduct(ctx, &productpb.DeleteProductRequest{Id: id})
+	return err
 }
 
 func (c *ProductClient) ListProducts(ctx context.Context, page, pageSize int32) ([]*productpb.Product, int64, error) {

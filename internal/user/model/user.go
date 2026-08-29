@@ -9,9 +9,18 @@ import "time"
 // 这里可以自由增加 CreatedAt/UpdatedAt/DeletedAt 等持久化专用字段，
 // 而不会影响对外暴露的 gRPC 契约。两者的转换写在 service 层。
 type User struct {
-	ID        uint64    `gorm:"primaryKey;autoIncrement"`
-	Username  string    `gorm:"column:username;type:varchar(64);uniqueIndex;not null"`
-	Email     string    `gorm:"column:email;type:varchar(128);uniqueIndex;not null"`
+	ID uint64 `gorm:"primaryKey;autoIncrement"`
+
+	Username string `gorm:"column:username;type:varchar(64);uniqueIndex;not null"`
+	Email    string `gorm:"column:email;type:varchar(128);uniqueIndex;not null"`
+
+	// PasswordHash 只存 bcrypt 哈希后的结果，永远不存明文密码。
+	// 这个字段故意只出现在 model 这一层：proto/user.User 和
+	// internal/gateway/model.UserDTO 都没有对应字段，service 层的
+	// toProto() 转换函数也不会去读它——密码不出网络传输是分层结构
+	// 本身保证的，不需要额外写"过滤敏感字段"的逻辑。
+	PasswordHash string `gorm:"column:password_hash;type:varchar(255);not null"`
+
 	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
 	UpdatedAt time.Time `gorm:"column:updated_at;autoUpdateTime"`
 }

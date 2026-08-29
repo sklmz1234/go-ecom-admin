@@ -9,9 +9,14 @@ option go_package = "go-ecom-admin/proto/user;userpb";
 // UserService 是 user-service 对外暴露的 gRPC 契约。
 // api-gateway 通过这份契约生成的客户端桩代码调用 user-service，
 // 两边永远不会引用对方的 internal 包，proto 就是唯一的耦合点。
+//
+// 阶段 2 起，「创建用户」只有 Register 一条路径（不再有阶段 1 那个不需要
+// 密码的 CreateUser）——一个项目里如果同时存在「无密码建号」和「带密码注册」
+// 两条语义重复的入口，会让调用方不知道该用哪个，也给绕过认证留了后门。
 service UserService {
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Login(LoginRequest) returns (LoginResponse);
   rpc GetUser(GetUserRequest) returns (GetUserResponse);
-  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
 }
 
 message GetUserRequest {
@@ -22,17 +27,32 @@ message GetUserResponse {
   User user = 1;
 }
 
-message CreateUserRequest {
+message RegisterRequest {
   string username = 1;
   string email = 2;
+  string password = 3; // 明文密码只在这一跳传输（gRPC 走内网，且生产环境应加 TLS），落库前 user-service 立刻做 bcrypt 哈希
 }
 
-message CreateUserResponse {
+message RegisterResponse {
   User user = 1;
+}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  string token = 1; // JWT，由 user-service 签发；api-gateway 只负责校验，不签发
+  User user = 2;
 }
 
 // User 是 gRPC 传输用的消息类型，故意不直接复用 internal/user/model.User。
 // 数据库模型可以自由改字段（加索引、加内部字段）而不用担心破坏对外契约。
+//
+// 注意：这里永远不会出现 password / password_hash 字段。哈希后的密码只存在于
+// internal/user/model.User（数据库模型）里，toProto() 转换函数根本不去读它，
+// 这样"密码不出现在网络传输里"是分层结构本身保证的，不是靠额外的过滤逻辑。
 message User {
   uint64 id = 1;
   string username = 2;

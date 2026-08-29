@@ -18,6 +18,7 @@ import (
 type Repository interface {
 	Create(ctx context.Context, u *model.User) error
 	GetByID(ctx context.Context, id uint64) (*model.User, error)
+	GetByUsername(ctx context.Context, username string) (*model.User, error)
 }
 
 type gormRepository struct {
@@ -43,6 +44,20 @@ func (r *gormRepository) Create(ctx context.Context, u *model.User) error {
 func (r *gormRepository) GetByID(ctx context.Context, id uint64) (*model.User, error) {
 	var u model.User
 	if err := r.db.WithContext(ctx).First(&u, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, apperrors.NotFound("user not found", err)
+		}
+		return nil, apperrors.Internal("failed to query user", err)
+	}
+	return &u, nil
+}
+
+// GetByUsername 用于 Login：按用户名查记录，找不到时返回的也是通用的
+// NotFound——是否要把"用户不存在"翻译成对外模糊的"用户名或密码错误"，
+// 是 service 层的职责（登录语义），repository 只管"有没有查到"这件事实。
+func (r *gormRepository) GetByUsername(ctx context.Context, username string) (*model.User, error) {
+	var u model.User
+	if err := r.db.WithContext(ctx).Where("username = ?", username).First(&u).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, apperrors.NotFound("user not found", err)
 		}

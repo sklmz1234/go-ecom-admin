@@ -13,9 +13,26 @@ type UserDTO struct {
 	CreatedAt int64  `json:"created_at"`
 }
 
-type CreateUserRequest struct {
+// RegisterRequest 对应 POST /api/v1/auth/register。密码只在这个 DTO 里
+// 短暂存在（HTTP body -> service 转发给 user-service），gateway 自己
+// 不做任何哈希/存储，那是 user-service 的职责。
+type RegisterRequest struct {
 	Username string `json:"username" binding:"required"`
 	Email    string `json:"email" binding:"required,email"`
+	Password string `json:"password" binding:"required,min=6"`
+}
+
+type LoginRequest struct {
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
+}
+
+// LoginResponseDTO 比 UserDTO 多一个 token 字段——单独定义而不是给
+// UserDTO 加可选 token 字段，避免 GetUser 之类的接口也"顺带"带上一个
+// 永远是空字符串的 token 字段，语义不清楚。
+type LoginResponseDTO struct {
+	Token string   `json:"token"`
+	User  *UserDTO `json:"user"`
 }
 
 // ProductDTO 是暴露给 REST 客户端的商品视图。
@@ -30,6 +47,16 @@ type ProductDTO struct {
 }
 
 type CreateProductRequest struct {
+	Name      string  `json:"name" binding:"required"`
+	PriceYuan float64 `json:"price_yuan" binding:"required,gt=0"`
+	Stock     int32   `json:"stock"`
+}
+
+// UpdateProductRequest 和 CreateProductRequest 字段一样，但故意不复用
+// 同一个结构体：语义不同（一个是"创建"一个是"整体替换"），以后两者的
+// 校验规则很可能会分叉（比如 Update 可能要允许部分字段可选），现在分开
+// 定义能省掉以后拆分时的破坏性改动。
+type UpdateProductRequest struct {
 	Name      string  `json:"name" binding:"required"`
 	PriceYuan float64 `json:"price_yuan" binding:"required,gt=0"`
 	Stock     int32   `json:"stock"`

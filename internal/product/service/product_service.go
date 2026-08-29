@@ -67,6 +67,43 @@ func (s *Service) ListProducts(ctx context.Context, req *productpb.ListProductsR
 	return &productpb.ListProductsResponse{Products: pbProducts, Total: total}, nil
 }
 
+// UpdateProduct 是整体替换语义，和 proto 里 UpdateProductRequest 的注释呼应：
+// 校验通过 -> repo.Update -> 再查一次拿到完整记录（主要是为了拿 CreatedAt，
+// 这个字段不在请求里，直接用请求参数拼 proto 会漏掉）。
+func (s *Service) UpdateProduct(ctx context.Context, req *productpb.UpdateProductRequest) (*productpb.UpdateProductResponse, error) {
+	if req.GetName() == "" || req.GetPriceCents() < 0 {
+		err := apperrors.InvalidArgument("name is required and price_cents must not be negative", nil)
+		return nil, apperrors.ToGRPCStatus(err)
+	}
+
+	p := &model.Product{
+		ID:         req.GetId(),
+		Name:       req.GetName(),
+		PriceCents: req.GetPriceCents(),
+		Stock:      req.GetStock(),
+	}
+	if err := s.repo.Update(ctx, p); err != nil {
+		s.log.Warn("update product failed", zap.Uint64("id", req.GetId()), zap.Error(err))
+		return nil, apperrors.ToGRPCStatus(err)
+	}
+
+	updated, err := s.repo.GetByID(ctx, req.GetId())
+	if err != nil {
+		s.log.Warn("reload product after update failed", zap.Uint64("id", req.GetId()), zap.Error(err))
+		return nil, apperrors.ToGRPCStatus(err)
+	}
+
+	return &productpb.UpdateProductResponse{Product: toProto(updated)}, nil
+}
+
+func (s *Service) DeleteProduct(ctx context.Context, req *productpb.DeleteProductRequest) (*productpb.DeleteProductResponse, error) {
+	if err := s.repo.Delete(ctx, req.GetId()); err != nil {
+		s.log.Warn("delete product failed", zap.Uint64("id", req.GetId()), zap.Error(err))
+		return nil, apperrors.ToGRPCStatus(err)
+	}
+	return &productpb.DeleteProductResponse{}, nil
+}
+
 func toProto(p *model.Product) *productpb.Product {
 	return &productpb.Product{
 		Id:         p.ID,

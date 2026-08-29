@@ -57,7 +57,7 @@ func main() {
 
 	svc := service.New(userClient, productClient)
 	h := handler.New(svc, log)
-	engine := router.New(h)
+	engine := router.New(h, cfg.JWT.Secret)
 
 	addr := fmt.Sprintf(":%d", cfg.Server.APIGateway.HTTPPort)
 	httpServer := &http.Server{
