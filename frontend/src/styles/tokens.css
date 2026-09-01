@@ -1,0 +1,32 @@
+:root {
+  color-scheme: light;
+  --navy-950: #101b31;
+  --navy-900: #17243c;
+  --navy-800: #243653;
+  --ink-950: #182235;
+  --ink-800: #344158;
+  --ink-600: #62708a;
+  --line: #dce3ed;
+  --line-strong: #c7d2e1;
+  --surface: #ffffff;
+  --canvas: #f3f6fa;
+  --canvas-deep: #e9eef5;
+  --blue: #1769e0;
+  --blue-hover: #0d57bf;
+  --blue-pale: #eaf2ff;
+  --red: #c63d4d;
+  --red-hover: #a92e3d;
+  --red-pale: #fff0f2;
+  --amber: #956200;
+  --amber-pale: #fff6db;
+  --shadow: 0 16px 38px rgb(18 33 56 / 8%);
+  --shadow-raised: 0 20px 50px rgb(13 28 50 / 18%);
+  --radius-sm: 8px;
+  --radius: 14px;
+  --radius-lg: 20px;
+  --font-sans: Inter, "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-data: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --sidebar-width: 256px;
+  --topbar-height: 72px;
+  --content-width: 1180px;
+}
