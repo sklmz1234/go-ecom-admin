@@ -1,30 +1,8 @@
-REST 客户端 / 前端
-HTTP/JSON :8080
-api-gateway（cmd/api-gateway）
-router
-middleware
-JWT 校验
-handler
-service
-repo
-gRPC 客户端
-internal/gateway：router → middleware → handler → service → repository（client.go）
-gRPC :9001
-gRPC :9002
-user-service（cmd/user-service）
-service
-bcrypt + JWT
-repository
-GORM
-implements userpb.UserServiceServer
-product-service（cmd/product-service）
-service
-校验+转换
-repository
-GORM
-implements productpb.ProductServiceServer
-MySQL · users 表
-password_hash 不出服务
-MySQL · products 表
-price_cents 用分存
-共享层：pkg/config(Viper) · pkg/logger(zap) · pkg/jwt · pkg/errors　｜　契约层：proto/user · proto/product（protoc 生成
+api-gateway（Gin，HTTP :8080）→ gRPC（:9001/:9002）→ user-service / product-service（各自 GORM → MySQL）
+
+gateway/repository/client.go	Repository 模式的泛化——数据源是“另一个服务”也能用同一模式封装
+product_repository.go	Update/Delete 用 RowsAffected==0 判存在性：省一次往返 + 无 TOCTOU 竞态
+user_service.go	登录统一错误文案防用户枚举攻击；bcrypt 在 service 不在 repo
+pkg/errors	错误码协议无关 + 边缘翻译；default 分支不透传 SQL 细节
+pkg/jwt	Parse 强制 HMAC 白名单，防 alg-confusion 攻击
+gateway/model/dto.go	反腐层：proto 契约不穿透到前端；分↔元换算归 gateway
