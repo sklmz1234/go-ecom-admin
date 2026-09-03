@@ -58,3 +58,19 @@ restful网关
 其他补充，dto反腐层，modle的值对内服务和对外的不一样，middleware鉴权中间件，jwt显示传参，校验，viper日志封装，优雅停机，接口化注入mock假数据单元测试，vite前端解决跨域
 
 
+ Docker 一键启动
+
+前置：装好 Docker Desktop，然后：
+
+cp .env.example .env
+make up
+
+常用命令：
+make seed   灌测试数据（10 个用户密码均为 123456，20 个商品）
+make logs   跟踪全部服务日志
+make down   停止（数据卷保留，数据不丢）
+make clean  停止并清空数据
+
+起来之后 curl http://localhost:8080/healthz 试一下，登录和商品接口照常走 8080。
+
+
