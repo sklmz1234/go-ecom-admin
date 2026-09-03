@@ -30,6 +30,30 @@ frontend/     一个 Vite 写的管理界面（在慢慢补）
 
 ## 怎么跑起来
 
+### 方式一：Docker Compose（推荐）
+
+一条命令起整套（MySQL + 3 个服务）：
+
+```bash
+cp .env.example .env   # 首次使用，可按需改密码/端口
+make up
+```
+
+常用操作：
+
+```bash
+make seed    # 灌测试数据：10 个用户（密码均为 123456）+ 20 个商品
+make logs    # 跟踪全部服务日志
+make down    # 停止（数据卷保留，数据不丢）
+make clean   # 停止并清空数据卷（数据清零）
+```
+
+实现要点：多阶段构建（golang:1.25-alpine 编译 → alpine 运行，`CGO_ENABLED=0` 静态编译）；
+容器内靠环境变量覆盖 config.yaml 的 `127.0.0.1` 默认值（Viper `AutomaticEnv`），
+服务间用 compose service 名寻址；MySQL 用 healthcheck 保证"真正就绪"后下游才启动。
+
+### 方式二：本机直接跑
+
 先准备一个 MySQL，建库：
 
 ```bash
@@ -94,7 +118,6 @@ go test ./...
 
 ## 接下来想做
 
-- docker-compose 一键起整套环境
 - 网关侧的 handler/service 层测试（现在主要覆盖了领域服务）
 - 可观测性：接入统一 trace 和 metrics
 - 限流、熔断（已经在别的 demo 里练过 sentinel，还没搬进来）

@@ -1,0 +1,16 @@
+# 构建上下文瘦身：这些目录/文件不参与镜像构建。
+# frontend 带 node_modules，不排除的话每次 build 都要传输几百 MB。
+.git
+.idea
+.workbuddy
+frontend
+docker-compose.yml
+Makefile
+.env
+.env.example
+README.md
+*.exe
+*.out
+coverage.*
+bin
+dist

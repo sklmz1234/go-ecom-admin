@@ -1,0 +1,106 @@
+# go-ecom-admin 本地编排：MySQL + 2 个 gRPC 服务 + 1 个 HTTP 网关。
+# 前置：cp .env.example .env（compose 自动读取同目录 .env 做变量替换）。
+name: go-ecom-admin
+
+# Go 服务共用的 MySQL 连接环境变量。
+# Viper AutomaticEnv（pkg/config）用它们覆盖 configs/config.yaml 里的
+# 127.0.0.1 默认值——容器内的 127.0.0.1 指向容器自己，必须换成 service 名。
+x-mysql-env: &mysql-env
+  MYSQL_HOST: mysql
+  MYSQL_PORT: "3306"
+  MYSQL_USER: ${MYSQL_USER:-ecom}
+  MYSQL_PASSWORD: ${MYSQL_PASSWORD:-ecom123}
+  MYSQL_DB_NAME: ${MYSQL_DB_NAME:-ecom_admin}
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DB_NAME:-ecom_admin}
+      # 业务专用账号（mysql 镜像首次初始化时自动创建并授权），
+      # 应用不拿 root 连库是基本规范。
+      MYSQL_USER: ${MYSQL_USER:-ecom}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-ecom123}
+      TZ: Asia/Shanghai
+    # 和 Go 服务容器的 TZ 保持一致，时间戳才不会差 8 小时
+    command: --default-time-zone=+08:00
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      - "${MYSQL_HOST_PORT:-3306}:3306"
+    healthcheck:
+      # 用 root 真正执行一次 SQL 而不是 mysqladmin ping：
+      # 首次初始化期间（root 密码还没设好）登录会失败，
+      # 这样保证 healthy = 建库建账号全部完成，下游服务连进来不会踩空。
+      test: ["CMD-SHELL", "mysql -h127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD -e 'SELECT 1' --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+
+  user-service:
+    build:
+      context: .
+      args:
+        SERVICE: user-service
+    image: go-ecom-admin/user-service
+    environment:
+      <<: *mysql-env
+      JWT_SECRET: ${JWT_SECRET:-dev-only-change-me-in-production}
+      TZ: Asia/Shanghai
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+
+  product-service:
+    build:
+      context: .
+      args:
+        SERVICE: product-service
+    image: go-ecom-admin/product-service
+    environment:
+      <<: *mysql-env
+      TZ: Asia/Shanghai
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api-gateway:
+    build:
+      context: .
+      args:
+        SERVICE: api-gateway
+    image: go-ecom-admin/api-gateway
+    environment:
+      # 容器网络内用 service 名寻址，替代 yaml 里的 127.0.0.1
+      GRPC_CLIENT_USER_SERVICE_ADDR: user-service:9001
+      GRPC_CLIENT_PRODUCT_SERVICE_ADDR: product-service:9002
+      JWT_SECRET: ${JWT_SECRET:-dev-only-change-me-in-production}
+      TZ: Asia/Shanghai
+    ports:
+      - "${GATEWAY_HOST_PORT:-8080}:8080"
+    depends_on:
+      - user-service
+      - product-service
+    restart: unless-stopped
+
+  # 种子工具：不随 make up 启动（profiles 隔离），用 make seed 手动执行
+  seed:
+    build:
+      context: .
+      args:
+        SERVICE: seed
+    image: go-ecom-admin/seed
+    profiles: ["tools"]
+    environment:
+      <<: *mysql-env
+      TZ: Asia/Shanghai
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql-data:
