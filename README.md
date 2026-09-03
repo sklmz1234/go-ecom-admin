@@ -1,123 +1,60 @@
 # go-ecom-admin
 
-我正在做的电商管理后台，也是我的第一个完整微服务项目。目标很直接：把它做成能写进简历、经得起面试追问的项目，所以里面每个设计决策我都尽量搞清楚"为什么"，而不是照着教程抄一遍。
+基于 Go 微服务架构的电商管理后台，包含用户认证与商品管理两大领域。项目采用 api-gateway + 独立领域服务*的经典微服务拓扑，网关通过 gRPC 调用下游服务，各服务使用 GORM 访问 MySQL。
+ 技术栈
 
-## 项目是什么
 
-三个服务：api-gateway、user-service、product-service。网关用 Gin 收 HTTP 请求，通过 gRPC 调两个下游服务，各自用 GORM 连 MySQL。选这个拓扑是因为它是微服务最经典的入门结构，能覆盖到服务间通信、认证、分层这些核心问题，又不会复杂到失控。
+ Go 1.25 
+HTTP 框架 Gin
+RPC gRPC + Protobuf
+ ORM GORM (MySQL)
+ 认证  JWT (golang-jwt/v5) + bcrypt 
+配置  Viper（YAML + 环境变量覆盖）
+ 单元测试 testify + mockery（mock）+ glebarez/sqlite（纯 Go 内存库） 
 
-```
-HTTP 客户端 → api-gateway (Gin, :8080)
-                ├─ gRPC :9001 → user-service    → MySQL
-                └─ gRPC :9002 → product-service → MySQL
-```
+ 目录结构
+go-ecom-admin/
 
-技术栈：Go 1.25 / Gin / gRPC + Protobuf / GORM / JWT (golang-jwt/v5) + bcrypt / Viper / zap。
+ cmd/                        # 组合根：每个服务一个入口
+ api-g  ateway/            # HTTP 网关 :8080
+user-service/           # 用户服务 gRPC :9001
+product-service/        # 商品服务 gRPC :9002
+seed/                   # 数据库 seed 工具
 
-## 目录结构
+configs/config.yaml         # 统一配置（dev 默认值，生产用环境变量覆盖）
+ internal/
+gateway/                # 网关：router / middleware / handler / service / repository / model
+user/                   # 用户域：model / repository / service
 
-```
-cmd/          每个服务一个入口，main.go 只做依赖组装
-configs/      config.yaml，本地开发默认值，生产用环境变量覆盖
-internal/
-  gateway/    router / middleware / handler / service / repository
-  user/       model / repository / service
-  product/    model / repository / service
-pkg/          config、logger、errors、jwt，可复用的基础设施
-proto/        .proto 文件和生成的代码
-frontend/     一个 Vite 写的管理界面（在慢慢补）
-```
+ product/                # 商品域：model / repository / service
+ 
+ pkg/                        # 可复用的基础设施包
+ 
+ config/                 # Viper 封装，强类型 Config 结构体
+ 
+ logger/                 # zap 封装
+ 
+ errors/                 # 应用层错误码（协议无关）
+ 
+jwt/                    # JWT 签发与解析
+proto/                      # .proto 源文件与生成的 pb 代码
+frontend/                   # 前端（Vite）
 
-## 怎么跑起来
 
-### 方式一：Docker Compose（推荐）
 
-一条命令起整套（MySQL + 3 个服务）：
 
-```bash
-cp .env.example .env   # 首次使用，可按需改密码/端口
-make up
-```
+gateway/repository/client.go Repository 模式的泛化：网关侧 gRPC 客户端统一封装，service 层依赖接口而非具体实现 
+ product_repository.go  Update/Delete 用 `RowsAffected == 0` 判存在性：省一次往返查询，且无 TOCTOU 竞态 
+ user_service.go   登录失败统一返回相同错误，防用户枚举攻击（无法探测用户名是否存在） 
+ pkg/errors   错误码协议无关 + 边缘翻译；错误分支不向客户端透传 SQL 细节 
+ pkg/jwt Parse 强制 HMAC 算法白名单，防 alg-confusion 攻击 
+ gateway/model/dto.go  反腐层：proto 与对外 DTO 之间的转换（含单位换算）归 gateway，领域服务不感知 HTTP 语义 
+ GORM TranslateError: true驱动方言错误（如 MySQL 1062 唯一键冲突）统一翻译为 gorm.ErrDuplicatedKey，让 repository 层的 errors.Is 判定可靠命中，重复注册返回 409 而非 500 
 
-常用操作：
+ 
+ go gin grpc gorm viper mysql vite
+restful网关
+用户的电商后台管理，1浏览器发请求项目树中的router路由到具体函数，挂载中间件 2handler的parse解析参数，成功则将user id写入gin.context，不成功，则直接c.abort ，后面的不会执行3service转换，分到元，float64～int64，四舍五入精确，4repository的client，是一种泛化的处理，把grpc连接的操作当成数据库来泛化，然后请求序列化protobuf走grpc9002端口，然后是product的servise，解析参数proto至modle等，然后到repository调gorm的函数生成数据库指令操作然后反过来再来一遍。
+其他补充，dto反腐层，modle的值对内服务和对外的不一样，middleware鉴权中间件，jwt显示传参，校验，viper日志封装，优雅停机，接口化注入mock假数据单元测试，vite前端解决跨域
 
-```bash
-make seed    # 灌测试数据：10 个用户（密码均为 123456）+ 20 个商品
-make logs    # 跟踪全部服务日志
-make down    # 停止（数据卷保留，数据不丢）
-make clean   # 停止并清空数据卷（数据清零）
-```
 
-实现要点：多阶段构建（golang:1.25-alpine 编译 → alpine 运行，`CGO_ENABLED=0` 静态编译）；
-容器内靠环境变量覆盖 config.yaml 的 `127.0.0.1` 默认值（Viper `AutomaticEnv`），
-服务间用 compose service 名寻址；MySQL 用 healthcheck 保证"真正就绪"后下游才启动。
-
-### 方式二：本机直接跑
-
-先准备一个 MySQL，建库：
-
-```bash
-mysql -uroot -proot -e "CREATE DATABASE IF NOT EXISTS ecom_admin"
-```
-
-三个终端分别启动：
-
-```bash
-go run ./cmd/user-service
-go run ./cmd/product-service
-go run ./cmd/api-gateway
-```
-
-试一下：
-
-```bash
-# 注册
-curl -X POST http://localhost:8080/api/v1/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"username":"alice","email":"alice@example.com","password":"secret123"}'
-
-# 登录拿 JWT
-curl -X POST http://localhost:8080/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"alice","password":"secret123"}'
-
-# 带 token 查商品
-curl http://localhost:8080/api/v1/products -H "Authorization: Bearer <token>"
-```
-
-config.yaml 里的 JWT secret 是开发用的默认值，生产环境记得用 `JWT_SECRET` 环境变量覆盖。
-
-## 测试
-
-```bash
-go test ./...
-```
-
-六个包全绿，覆盖率在 66%~88% 之间。我分了两层来测：
-
-- service 层用 mockery 生成的 MockRepository，只测业务规则本身——参数校验、bcrypt、防用户枚举、AppError 到 gRPC status 的翻译这些，不碰数据库。
-- repository 层用 glebarez/sqlite（纯 Go 的内存 SQLite）跑真实的 GORM 行为，不需要本机装 MySQL。
-
-接口改了以后重新生成 mock：`mockery`，配置在 `.mockery.yaml`。
-
-## 几个我比较得意的设计点
-
-写下来主要是为了面试的时候自己能讲清楚：
-
-1. **Update/Delete 判存在性用 RowsAffected == 0**（product_repository.go）。一开始我是先查一遍再改，后来意识到这不仅多一次往返，还有 TOCTOU 竞态——查的时候在，改的时候可能没了。用受影响行数一次搞定。
-
-2. **登录失败不区分"用户不存在"和"密码错误"**（user_service.go）。统一返回同一个错误，否则攻击者可以拿登录接口枚举出哪些用户名注册过。
-
-3. **JWT Parse 强制 HMAC 算法白名单**（pkg/jwt）。不指定的话 golang-jwt 会接受 token header 里声明的算法，经典的 alg-confusion 攻击就能伪造 admin token。
-
-4. **错误码协议无关**（pkg/errors）。业务错误定义在应用层，到网关翻译成 HTTP 状态码、在服务里翻译成 gRPC status。这样 SQL 报错细节也不会漏到客户端。
-
-5. **GORM 开了 TranslateError: true**。踩过一个坑：不开这个开关，repository 里的 `errors.Is(err, gorm.ErrDuplicatedKey)` 永远不会命中，重复用户名注册会被当成 500 而不是 409。驱动的 1062 错误得让 GORM 先翻译成统一错误才好判。
-
-6. **proto 和对外 DTO 的转换归 gateway**（gateway/model/dto.go）。相当于反腐层，领域服务不感知 HTTP 那边的字段格式和单位，改接口契约不会穿透到业务代码。
-
-## 接下来想做
-
-- 网关侧的 handler/service 层测试（现在主要覆盖了领域服务）
-- 可观测性：接入统一 trace 和 metrics
-- 限流、熔断（已经在别的 demo 里练过 sentinel，还没搬进来）
