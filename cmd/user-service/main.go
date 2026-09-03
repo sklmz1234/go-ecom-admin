@@ -49,7 +49,11 @@ func main() {
 	// 注册、登录和密码校验都依赖持久化用户数据，因此服务启动时必须先确认
 	// 数据库连接和表结构准备完成。初始化失败时立即结束进程，避免服务在无法
 	// 正常处理请求的状态下继续监听，直到请求到来后才暴露数据库不可用的问题。
-	db, err := gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{})
+	// TranslateError: true 让 GORM 把驱动的方言错误（例如 MySQL 的 1062
+	// 唯一键冲突）翻译成统一的 gorm.ErrDuplicatedKey——不开这个开关，
+	// repository.Create 里的 errors.Is(err, gorm.ErrDuplicatedKey) 永远
+	// 不会命中，重复用户名会被错误地当成 Internal(500) 而不是 409。
+	db, err := gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{TranslateError: true})
 	if err != nil {
 		log.Fatal("failed to connect to MySQL", zap.Error(err))
 	}

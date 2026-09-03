@@ -20,3 +20,6 @@ coverage.*
 # OS
 .DS_Store
 Thumbs.db
+
+# AI assistant workspace data
+.workbuddy/
