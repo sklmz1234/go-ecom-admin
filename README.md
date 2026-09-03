@@ -1,76 +1,50 @@
 # go-ecom-admin
 
-基于 Go 微服务架构的电商管理后台，包含用户认证与商品管理两大领域。项目采用 **api-gateway + 独立领域服务** 的经典微服务拓扑，网关通过 gRPC 调用下游服务，各服务使用 GORM 访问 MySQL。
+我正在做的电商管理后台，也是我的第一个完整微服务项目。目标很直接：把它做成能写进简历、经得起面试追问的项目，所以里面每个设计决策我都尽量搞清楚"为什么"，而不是照着教程抄一遍。
 
-## 架构
+## 项目是什么
 
-```mermaid
-flowchart LR
-    Client[HTTP 客户端] -->|REST :8080| GW[api-gateway<br/>Gin]
-    GW -->|gRPC :9001| US[user-service<br/>GORM → MySQL]
-    GW -->|gRPC :9002| PS[product-service<br/>GORM → MySQL]
+三个服务：api-gateway、user-service、product-service。网关用 Gin 收 HTTP 请求，通过 gRPC 调两个下游服务，各自用 GORM 连 MySQL。选这个拓扑是因为它是微服务最经典的入门结构，能覆盖到服务间通信、认证、分层这些核心问题，又不会复杂到失控。
 
-    subgraph api-gateway 内部分层
-        R[router] --> MW[middleware<br/>JWT 鉴权] --> H[handler] --> S[service] --> RC[repository<br/>gRPC client 封装]
-    end
-
-    subgraph 领域服务内部分层
-        GPB[gRPC server] --> GS[service<br/>业务规则] --> GR[repository<br/>GORM]
-    end
+```
+HTTP 客户端 → api-gateway (Gin, :8080)
+                ├─ gRPC :9001 → user-service    → MySQL
+                └─ gRPC :9002 → product-service → MySQL
 ```
 
-## 技术栈
-
-| 类别 | 选型 |
-|---|---|
-| 语言 | Go 1.25 |
-| HTTP 框架 | Gin |
-| RPC | gRPC + Protobuf |
-| ORM | GORM (MySQL) |
-| 认证 | JWT (golang-jwt/v5) + bcrypt |
-| 配置 | Viper（YAML + 环境变量覆盖） |
-| 日志 | zap |
-| 单元测试 | testify + mockery（mock）+ glebarez/sqlite（纯 Go 内存库） |
+技术栈：Go 1.25 / Gin / gRPC + Protobuf / GORM / JWT (golang-jwt/v5) + bcrypt / Viper / zap。
 
 ## 目录结构
 
 ```
-go-ecom-admin/
-├── cmd/                        # 组合根：每个服务一个入口
-│   ├── api-gateway/            # HTTP 网关 :8080
-│   ├── user-service/           # 用户服务 gRPC :9001
-│   ├── product-service/        # 商品服务 gRPC :9002
-│   └── seed/                   # 数据库 seed 工具
-├── configs/config.yaml         # 统一配置（dev 默认值，生产用环境变量覆盖）
-├── internal/
-│   ├── gateway/                # 网关：router / middleware / handler / service / repository / model
-│   ├── user/                   # 用户域：model / repository / service
-│   └── product/                # 商品域：model / repository / service
-├── pkg/                        # 可复用的基础设施包
-│   ├── config/                 # Viper 封装，强类型 Config 结构体
-│   ├── logger/                 # zap 封装
-│   ├── errors/                 # 应用层错误码（协议无关）
-│   └── jwt/                    # JWT 签发与解析
-├── proto/                      # .proto 源文件与生成的 pb 代码
-└── frontend/                   # 前端（Vite）
+cmd/          每个服务一个入口，main.go 只做依赖组装
+configs/      config.yaml，本地开发默认值，生产用环境变量覆盖
+internal/
+  gateway/    router / middleware / handler / service / repository
+  user/       model / repository / service
+  product/    model / repository / service
+pkg/          config、logger、errors、jwt，可复用的基础设施
+proto/        .proto 文件和生成的代码
+frontend/     一个 Vite 写的管理界面（在慢慢补）
 ```
 
-## 快速开始
+## 怎么跑起来
+
+先准备一个 MySQL，建库：
 
 ```bash
-# 1. 准备 MySQL，创建数据库
 mysql -uroot -proot -e "CREATE DATABASE IF NOT EXISTS ecom_admin"
+```
 
-# 2. 启动服务（各开一个终端）
+三个终端分别启动：
+
+```bash
 go run ./cmd/user-service
 go run ./cmd/product-service
 go run ./cmd/api-gateway
-
-# 3. （可选）填充测试数据
-go run ./cmd/seed
 ```
 
-调用示例：
+试一下：
 
 ```bash
 # 注册
@@ -78,53 +52,49 @@ curl -X POST http://localhost:8080/api/v1/auth/register \
   -H "Content-Type: application/json" \
   -d '{"username":"alice","email":"alice@example.com","password":"secret123"}'
 
-# 登录（返回 JWT）
+# 登录拿 JWT
 curl -X POST http://localhost:8080/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"alice","password":"secret123"}'
 
-# 携带 JWT 访问商品接口
-curl http://localhost:8080/api/v1/products \
-  -H "Authorization: Bearer <token>"
+# 带 token 查商品
+curl http://localhost:8080/api/v1/products -H "Authorization: Bearer <token>"
 ```
 
-> 生产环境务必用 `JWT_SECRET` 环境变量覆盖默认 secret（Viper `AutomaticEnv` 已将 `jwt.secret` 映射为 `JWT_SECRET`）。
+config.yaml 里的 JWT secret 是开发用的默认值，生产环境记得用 `JWT_SECRET` 环境变量覆盖。
 
-## 单元测试
+## 测试
 
 ```bash
-go test ./...                     # 全量测试
-go test -cover ./internal/... ./pkg/...   # 带覆盖率
+go test ./...
 ```
 
-测试分层策略：
+六个包全绿，覆盖率在 66%~88% 之间。我分了两层来测：
 
-| 层 | 测试方式 | 覆盖率 |
-|---|---|---|
-| service | mockery 生成的 MockRepository 注入，只验证业务规则（参数校验、bcrypt、防用户枚举、JWT 签发、AppError → gRPC status 翻译） | user 88.6% / product 74.4% |
-| repository | glebarez/sqlite 纯 Go 内存库跑真实 GORM 行为，不依赖外部 MySQL | user 66.7% / product 82.9% |
-| pkg/jwt | 覆盖签发/解析/过期/HMAC 白名单等安全边界 | 82.4% |
-| pkg/errors | 错误码翻译与边缘分支 | 80.6% |
+- service 层用 mockery 生成的 MockRepository，只测业务规则本身——参数校验、bcrypt、防用户枚举、AppError 到 gRPC status 的翻译这些，不碰数据库。
+- repository 层用 glebarez/sqlite（纯 Go 的内存 SQLite）跑真实的 GORM 行为，不需要本机装 MySQL。
 
-重新生成 mock（接口变更后）：
+接口改了以后重新生成 mock：`mockery`，配置在 `.mockery.yaml`。
 
-```bash
-mockery   # 配置见 .mockery.yaml
-```
+## 几个我比较得意的设计点
 
-## 设计要点
+写下来主要是为了面试的时候自己能讲清楚：
 
-| 位置 | 设计决策 |
-|---|---|
-| `gateway/repository/client.go` | Repository 模式的泛化：网关侧 gRPC 客户端统一封装，service 层依赖接口而非具体实现 |
-| `product_repository.go` | Update/Delete 用 `RowsAffected == 0` 判存在性：省一次往返查询，且无 TOCTOU 竞态 |
-| `user_service.go` | 登录失败统一返回相同错误，防用户枚举攻击（无法探测用户名是否存在） |
-| `pkg/errors` | 错误码协议无关 + 边缘翻译；错误分支不向客户端透传 SQL 细节 |
-| `pkg/jwt` | Parse 强制 HMAC 算法白名单，防 alg-confusion 攻击 |
-| `gateway/model/dto.go` | 反腐层：proto 与对外 DTO 之间的转换（含单位换算）归 gateway，领域服务不感知 HTTP 语义 |
-| GORM `TranslateError: true` | 驱动方言错误（如 MySQL 1062 唯一键冲突）统一翻译为 `gorm.ErrDuplicatedKey`，让 repository 层的 `errors.Is` 判定可靠命中，重复注册返回 409 而非 500 |
+1. **Update/Delete 判存在性用 RowsAffected == 0**（product_repository.go）。一开始我是先查一遍再改，后来意识到这不仅多一次往返，还有 TOCTOU 竞态——查的时候在，改的时候可能没了。用受影响行数一次搞定。
 
-## 依赖注入与分层约定
+2. **登录失败不区分"用户不存在"和"密码错误"**（user_service.go）。统一返回同一个错误，否则攻击者可以拿登录接口枚举出哪些用户名注册过。
 
-- `cmd/*/main.go` 是唯一的组合根：读配置 → 建日志 → 连数据库/拨号 gRPC → 组装依赖链 → 启动服务。
-- 各层通过构造函数注入接口依赖（repository 接口在 service 之下定义、由 gRPC client 或 GORM 实现分别落地），`main.go` 只做装配，不含业务逻辑。
+3. **JWT Parse 强制 HMAC 算法白名单**（pkg/jwt）。不指定的话 golang-jwt 会接受 token header 里声明的算法，经典的 alg-confusion 攻击就能伪造 admin token。
+
+4. **错误码协议无关**（pkg/errors）。业务错误定义在应用层，到网关翻译成 HTTP 状态码、在服务里翻译成 gRPC status。这样 SQL 报错细节也不会漏到客户端。
+
+5. **GORM 开了 TranslateError: true**。踩过一个坑：不开这个开关，repository 里的 `errors.Is(err, gorm.ErrDuplicatedKey)` 永远不会命中，重复用户名注册会被当成 500 而不是 409。驱动的 1062 错误得让 GORM 先翻译成统一错误才好判。
+
+6. **proto 和对外 DTO 的转换归 gateway**（gateway/model/dto.go）。相当于反腐层，领域服务不感知 HTTP 那边的字段格式和单位，改接口契约不会穿透到业务代码。
+
+## 接下来想做
+
+- docker-compose 一键起整套环境
+- 网关侧的 handler/service 层测试（现在主要覆盖了领域服务）
+- 可观测性：接入统一 trace 和 metrics
+- 限流、熔断（已经在别的 demo 里练过 sentinel，还没搬进来）
