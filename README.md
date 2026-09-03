@@ -14,23 +14,31 @@ RPC gRPC + Protobuf
 
  目录结构
 go-ecom-admin/
-├── cmd/                        # 组合根：每个服务一个入口
-│   ├── api-gateway/            # HTTP 网关 :8080
-│   ├── user-service/           # 用户服务 gRPC :9001
-│   ├── product-service/        # 商品服务 gRPC :9002
-│   └── seed/                   # 数据库 seed 工具
-├── configs/config.yaml         # 统一配置（dev 默认值，生产用环境变量覆盖）
-├── internal/
-│   ├── gateway/                # 网关：router / middleware / handler / service / repository / model
-│   ├── user/                   # 用户域：model / repository / service
-│   └── product/                # 商品域：model / repository / service
-├── pkg/                        # 可复用的基础设施包
-│   ├── config/                 # Viper 封装，强类型 Config 结构体
-│   ├── logger/                 # zap 封装
-│   ├── errors/                 # 应用层错误码（协议无关）
-│   └── jwt/                    # JWT 签发与解析
-├── proto/                      # .proto 源文件与生成的 pb 代码
-└── frontend/                   # 前端（Vite）
+
+ cmd/                        # 组合根：每个服务一个入口
+ api-g  ateway/            # HTTP 网关 :8080
+user-service/           # 用户服务 gRPC :9001
+product-service/        # 商品服务 gRPC :9002
+seed/                   # 数据库 seed 工具
+
+configs/config.yaml         # 统一配置（dev 默认值，生产用环境变量覆盖）
+ internal/
+gateway/                # 网关：router / middleware / handler / service / repository / model
+user/                   # 用户域：model / repository / service
+
+ product/                # 商品域：model / repository / service
+ 
+ pkg/                        # 可复用的基础设施包
+ 
+ config/                 # Viper 封装，强类型 Config 结构体
+ 
+ logger/                 # zap 封装
+ 
+ errors/                 # 应用层错误码（协议无关）
+ 
+jwt/                    # JWT 签发与解析
+proto/                      # .proto 源文件与生成的 pb 代码
+frontend/                   # 前端（Vite）
 
 
 
