@@ -52,7 +52,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	db, err := gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{})
+	db, err := gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{TranslateError: true}) // TranslateError: 驱动方言错误(如 MySQL 1062)→gorm.ErrDuplicatedKey 等统一错误
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "connect mysql: %v\n", err)
 		os.Exit(1)

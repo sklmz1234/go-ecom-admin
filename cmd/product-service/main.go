@@ -49,7 +49,7 @@ func main() {
 
 	// 和 user-service 一样：现在依赖真实数据（库存/价格都要能改），
 	// 连不上数据库直接 Fatal，不再走"scaffold mode"的优雅降级。
-	db, err := gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{})
+	db, err := gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{TranslateError: true}) // TranslateError: 驱动方言错误(如 MySQL 1062)→gorm.ErrDuplicatedKey 等统一错误
 	if err != nil {
 		log.Fatal("failed to connect to MySQL", zap.Error(err))
 	}
