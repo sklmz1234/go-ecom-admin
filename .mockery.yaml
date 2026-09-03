@@ -1,0 +1,26 @@
+# mockery 配置：以「包」为单位批量生成 testify 风格 mock。
+# 运行方式：mockery（在仓库根目录执行，二进制位于 $(go env GOPATH)/bin）。
+#
+# 约定：mock 统一放在对应接口所在包的 mocks/ 子目录，包名 mocks。
+# 测试代码 import 这个包，用 mock.Mock 的 EXPECT() 语法录制期望（用法同 gomock）。
+packages:
+  go-ecom-admin/internal/user/repository:
+    config:
+      all: false
+    interfaces:
+      Repository:
+        config:
+          mockname: MockRepository
+          filename: mock_repository.go
+          dir: "{{.InterfaceDir}}/mocks"
+          outpkg: mocks
+  go-ecom-admin/internal/product/repository:
+    config:
+      all: false
+    interfaces:
+      Repository:
+        config:
+          mockname: MockRepository
+          filename: mock_repository.go
+          dir: "{{.InterfaceDir}}/mocks"
+          outpkg: mocks
