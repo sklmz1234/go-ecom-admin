@@ -1,0 +1,17 @@
+# ConfigMap：非敏感配置，等价于 docker-compose.yml 里 environment 的公开部分。
+# 这些环境变量通过 Viper AutomaticEnv 覆盖镜像内 configs/config.yaml 的
+# 127.0.0.1 开发默认值——和 compose 阶段用的是同一套机制，Go 代码零改动。
+#
+# MYSQL_HOST=mysql / GRPC_CLIENT_*_ADDR=user-service:9001 都是 Service 名：
+# 容器网络里"Service 名即 DNS"，和 compose 的 service 名寻址一一对应。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: ecom
+data:
+  MYSQL_HOST: "mysql"
+  MYSQL_PORT: "3306"
+  MYSQL_DB_NAME: "ecom_admin"
+  GRPC_CLIENT_USER_SERVICE_ADDR: "user-service:9001"
+  GRPC_CLIENT_PRODUCT_SERVICE_ADDR: "product-service:9002"

@@ -13,6 +13,8 @@ import (
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -63,6 +65,12 @@ func main() {
 	grpcServer := grpc.NewServer()
 	productpb.RegisterProductServiceServer(grpcServer, svc)
 	reflection.Register(grpcServer)
+
+	// 同 user-service：注册标准健康检查服务，供 K8s 原生 grpc 探针使用，
+	// 详见 cmd/user-service/main.go 里的注释。
+	healthSrv := health.NewServer()
+	healthpb.RegisterHealthServer(grpcServer, healthSrv)
+	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 
 	addr := fmt.Sprintf(":%d", cfg.Server.ProductService.GRPCPort)
 	lis, err := net.Listen("tcp", addr)
