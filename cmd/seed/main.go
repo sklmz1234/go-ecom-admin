@@ -17,12 +17,14 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 
 	"go-ecom-admin/pkg/config"
+	"go-ecom-admin/pkg/database"
 
 	productmodel "go-ecom-admin/internal/product/model"
 	usermodel "go-ecom-admin/internal/user/model"
@@ -58,7 +60,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := db.AutoMigrate(&usermodel.User{}, &productmodel.Product{}); err != nil {
+	// 带锁迁移：seed 可能和业务服务同时启动（如 make k8s-seed 在
+	// Deployment 滚动起来时跑），同样要走命名锁避免抢建表。
+	if err := database.Migrate(db, 30*time.Second, &usermodel.User{}, &productmodel.Product{}); err != nil {
 		fmt.Fprintf(os.Stderr, "auto migrate: %v\n", err)
 		os.Exit(1)
 	}
