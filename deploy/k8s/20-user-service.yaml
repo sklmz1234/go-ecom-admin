@@ -1,0 +1,76 @@
+# user-service：Deployment(2 副本) + Service。
+# 这份文件是三个服务里的"讲解范本"，product/gateway 与它结构对称。
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service # 这个名字就是集群 DNS 名，gateway 拨 user-service:9001 靠它
+  namespace: ecom
+spec:
+  selector:
+    app: user-service # 靠 label 把 Service 和 Pod 关联起来（不是靠名字！）
+  ports:
+    - name: grpc
+      port: 9001
+      targetPort: 9001
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: ecom
+  labels:
+    app: user-service
+spec:
+  replicas: 2 # 两个副本分散在不同 Node 上——Service 自动做负载均衡
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service # 必须和上面 matchLabels 一致
+    spec:
+      containers:
+        - name: user-service
+          image: go-ecom-admin/user-service
+          # 镜像没打版本 tag（默认 latest），K8s 对 latest 默认 Always 拉取。
+          # 本地 kind 集群镜像就在本机（containerd 镜像存储），
+          # 显式 IfNotPresent 才能直接用，不去 registry 拉一个不存在的仓库。
+          imagePullPolicy: IfNotPresent
+          # envFrom 整包注入：ConfigMap 放非敏感，Secret 放敏感，
+          # 覆盖机制 = Viper AutomaticEnv（compose 阶段已验证的那套）。
+          envFrom:
+            - configMapRef: { name: app-config }
+            - secretRef: { name: db-credentials } # 只给 DB 业务账号，root 密码不进这个 Pod
+            - secretRef: { name: jwt-secret }     # user 是 JWT 签发方
+          ports:
+            - name: grpc
+              containerPort: 9001
+          # K8s 原生 grpc 探针（1.24+）：调 grpc.health.v1 的 Check，
+          # 即 main.go 里注册的标准健康检查服务。端口通≠服务可用，
+          # 这才是有业务含义的探活。
+          readinessProbe: # 未就绪就从 Service 摘除，不接流量但不重启
+            grpc:
+              port: 9001
+            periodSeconds: 5
+          livenessProbe: # 真死了才重启 Pod
+            grpc:
+              port: 9001
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          # ---- 优雅退出（配合 main.go 的 SIGTERM 处理）----
+          # Pod 终止顺序：preStop → SIGTERM → 宽限期到 → SIGKILL。
+          # preStop sleep 5：endpoint 摘除是异步的，摘除消息传遍集群前
+          # 仍可能有新请求打进来，这 5 秒就是等"路由表更新完"。
+          # 之后 SIGTERM 触发 grpcServer.GracefulStop()：不再收新连接，
+          # 但等在途请求处理完才退。terminationGracePeriodSeconds: 30
+          # 是兜底：万一有请求卡死，30 秒后强制 SIGKILL，不让僵尸 Pod 占着名额。
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+      # Pod 级字段：preStop + 宽限期共同构成优雅退出，详见上面注释。
+      terminationGracePeriodSeconds: 30

@@ -1,0 +1,71 @@
+# api-gateway：Deployment(2 副本) + Service。
+# 与 gRPC 服务的差异：HTTP 探针打 /healthz（router.go 里注册的端点），
+# 不连数据库所以不挂 db-credentials，JWT_SECRET 逐项引用（它是校验方）。
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: ecom
+spec:
+  selector:
+    app: api-gateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: ecom
+  labels:
+    app: api-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+        - name: api-gateway
+          image: go-ecom-admin/api-gateway
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: { name: app-config } # 含 GRPC_CLIENT_*_ADDR=Service名:端口
+          env:
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef: { name: jwt-secret, key: JWT_SECRET }
+          ports:
+            - name: http
+              containerPort: 8080
+          # HTTP 服务用 httpGet 探 /healthz（无鉴权，专给探针用）。
+          # readiness 和 liveness 用同一个端点在这里是安全的：
+          # healthz 不依赖下游，真正依赖下游的是业务接口——
+          # "DB 挂了要不要重启网关"的答案是不要，重启解决不了下游问题。
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          # preStop sleep 5 等待 endpoint 摘除传播，
+          # 然后 SIGTERM → main.go 的 httpServer.Shutdown(5s 超时)。
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+      terminationGracePeriodSeconds: 30

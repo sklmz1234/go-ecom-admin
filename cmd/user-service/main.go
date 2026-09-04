@@ -12,6 +12,8 @@ import (
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -67,6 +69,15 @@ func main() {
 	grpcServer := grpc.NewServer()
 	userpb.RegisterUserServiceServer(grpcServer, svc)
 	reflection.Register(grpcServer) // 方便本地用 grpcurl 调试，生产环境按需关闭
+
+	// 注册 gRPC 标准健康检查服务（grpc.health.v1）：
+	// K8s 原生 grpc 探针（readinessProbe/livenessProbe 的 grpc: 类型）就是
+	// 调它的 Check 方法。不注册的话探针只能退化成 tcpSocket——端口通 ≠
+	// 服务真的能处理请求，数据库挂了 tcpSocket 照样绿。健康包是 grpc
+	// 模块自带的，不算新依赖。
+	healthSrv := health.NewServer()
+	healthpb.RegisterHealthServer(grpcServer, healthSrv)
+	healthSrv.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 
 	addr := fmt.Sprintf(":%d", cfg.Server.UserService.GRPCPort)
 	lis, err := net.Listen("tcp", addr)

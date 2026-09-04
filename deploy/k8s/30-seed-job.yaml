@@ -1,0 +1,21 @@
+# seed：一次性 Job（对应 compose 里 profiles: ["tools"] 的手动工具）。
+# Job 和 Deployment 的区别：跑完即止，Pod 状态变 Completed 不重启。
+# 重跑方式：Job 名字是 immutable 的，必须先 delete 再 apply
+# （make k8s-seed 已封装：先 delete --ignore-not-found 再 apply）。
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed
+  namespace: ecom
+spec:
+  backoffLimit: 1 # 失败重试一次就够：失败多半是 MySQL 还没 ready
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: seed
+          image: go-ecom-admin/seed
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: { name: app-config }
+            - secretRef: { name: db-credentials }

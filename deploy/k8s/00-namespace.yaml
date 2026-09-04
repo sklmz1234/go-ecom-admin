@@ -1,0 +1,9 @@
+# Namespace：把项目所有资源圈在 ecom 里，不污染集群默认空间。
+# kubectl 常用 -n ecom 指定；集群 DNS 短名解析也依赖它
+# （user-service 全名 = user-service.ecom.svc.cluster.local）。
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ecom
+  labels:
+    app.kubernetes.io/part-of: go-ecom-admin

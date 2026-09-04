@@ -1,0 +1,28 @@
+# Ingress（可选，默认不用）：集群统一入口，按域名路由到 Service。
+# 前置条件：集群里得先装 Ingress 控制器（本目录不放它，因为
+# kubectl apply -f deploy/k8s 不递归，optional/ 不会被误装）：
+#
+#   kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.12.1/deploy/static/provider/kind/deploy.yaml
+#
+# 装好后本文件才能生效；不装的话用端口转发访问网关（零依赖）：
+#
+#   kubectl port-forward -n ecom svc/api-gateway 8080:8080
+#
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api-gateway
+  namespace: ecom
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: ecom.local # 配 hosts 文件：127.0.0.1 ecom.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-gateway
+                port:
+                  number: 8080
