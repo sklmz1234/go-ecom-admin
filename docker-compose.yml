@@ -62,9 +62,13 @@ services:
     image: go-ecom-admin/product-service
     environment:
       <<: *mysql-env
+      # 缓存地址，覆盖 config.yaml 里的 127.0.0.1:6379
+      REDIS_ADDR: redis:6379
       TZ: Asia/Shanghai
     depends_on:
       mysql:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
 
@@ -102,5 +106,21 @@ services:
       mysql:
         condition: service_healthy
 
+  # product-service 读缓存（阶段 2C）。不暴露宿主机端口——只有容器网络内的
+  # product-service 需要连它，攻击面最小化（和 K8s 里不给 gateway 挂 db 凭证同理）。
+  redis:
+    image: redis:7-alpine
+    environment:
+      TZ: Asia/Shanghai
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
   mysql-data:
+  redis-data:

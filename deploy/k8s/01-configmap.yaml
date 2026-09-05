@@ -13,5 +13,7 @@ data:
   MYSQL_HOST: "mysql"
   MYSQL_PORT: "3306"
   MYSQL_DB_NAME: "ecom_admin"
+  # product-service 读缓存（11-redis.yaml），Service 名即 DNS，同 MYSQL_HOST 机制
+  REDIS_ADDR: "redis:6379"
   GRPC_CLIENT_USER_SERVICE_ADDR: "user-service:9001"
   GRPC_CLIENT_PRODUCT_SERVICE_ADDR: "product-service:9002"

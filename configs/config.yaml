@@ -18,6 +18,13 @@ mysql:
   max_idle_conns: 10
   max_open_conns: 100
 
+# product-service 读缓存用的 Redis。容器环境里用 REDIS_ADDR 覆盖成 service 名
+# （和 MYSQL_HOST 同一套 Viper AutomaticEnv 机制）。
+redis:
+  addr: 127.0.0.1:6379
+  password: ""
+  db: 0
+
 # 开发环境用的默认 secret，生产环境务必通过 JWT_SECRET 环境变量覆盖
 # （Viper 的 AutomaticEnv 会把 "." 换成 "_"，jwt.secret -> JWT_SECRET）。
 jwt:

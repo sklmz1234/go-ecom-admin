@@ -20,6 +20,7 @@ type Config struct {
 	App        AppConfig        `mapstructure:"app"`
 	Log        LogConfig        `mapstructure:"log"`
 	MySQL      MySQLConfig      `mapstructure:"mysql"`
+	Redis      RedisConfig      `mapstructure:"redis"`
 	JWT        JWTConfig        `mapstructure:"jwt"`
 	Server     ServerConfig     `mapstructure:"server"`
 	GRPCClient GRPCClientConfig `mapstructure:"grpc_client"`
@@ -53,6 +54,16 @@ type MySQLConfig struct {
 func (m MySQLConfig) DSN() string {
 	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=%s&parseTime=True&loc=Local",
 		m.User, m.Password, m.Host, m.Port, m.DBName, m.Charset)
+}
+
+// RedisConfig 目前只有 product-service 的读缓存在用，但放在公共配置里——
+// 后续 order-service 的库存缓存也会读同一份（同一个 Redis 实例，不同 key 前缀）。
+// Addr 用 host:port 单字段而不是拆两个，因为 go-redis 原生就吃这个格式，
+// 环境变量覆盖（REDIS_ADDR）也只需一个值。
+type RedisConfig struct {
+	Addr     string `mapstructure:"addr"`
+	Password string `mapstructure:"password"`
+	DB       int    `mapstructure:"db"`
 }
 
 // JWTConfig 是 user-service（签发）和 api-gateway（校验）共用的一份配置——

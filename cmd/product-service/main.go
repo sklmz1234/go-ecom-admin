@@ -20,6 +20,7 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 
+	"go-ecom-admin/pkg/cache"
 	"go-ecom-admin/pkg/config"
 	"go-ecom-admin/pkg/database"
 	"go-ecom-admin/pkg/logger"
@@ -62,6 +63,23 @@ func main() {
 		log.Fatal("auto migrate failed", zap.Error(err))
 	}
 	repo := repository.NewGormRepository(db)
+
+	// 缓存装饰器（阶段 2C）：Redis 可用就把 gorm 实现包进 cache-aside 装饰器，
+	// service 层拿到的仍是同一个 Repository 接口，零改动。
+	// Redis 连不上时降级为直连 MySQL——缓存是加速层不是正确性依赖，
+	// 缓存挂了服务应该变慢而不是变挂（和装饰器里"Redis 故障降级回源"同一原则）。
+	rdb, err := cache.New(cache.Config{
+		Addr:     cfg.Redis.Addr,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	if err != nil {
+		log.Warn("redis unavailable, product cache disabled (falling back to direct MySQL)", zap.Error(err))
+	} else {
+		defer rdb.Close()
+		repo = repository.NewCachedRepository(repo, rdb)
+		log.Info("product cache enabled", zap.String("redis", cfg.Redis.Addr))
+	}
 
 	svc := service.New(repo, log)
 
