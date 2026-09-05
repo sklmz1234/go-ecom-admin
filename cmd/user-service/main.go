@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -19,6 +20,7 @@ import (
 	"gorm.io/gorm"
 
 	"go-ecom-admin/pkg/config"
+	"go-ecom-admin/pkg/database"
 	"go-ecom-admin/pkg/logger"
 
 	"go-ecom-admin/internal/user/model"
@@ -59,7 +61,10 @@ func main() {
 	if err != nil {
 		log.Fatal("failed to connect to MySQL", zap.Error(err))
 	}
-	if err := db.AutoMigrate(&model.User{}); err != nil {
+	// 带锁迁移：K8s 下 Deployment 是 2 副本，两个 Pod 同时启动时
+	// 裸 AutoMigrate 会抢建表（Error 1050 → CrashLoop）。GET_LOCK 命名锁
+	// 串行化后，先到者建表、后到者等锁再跑一遍幂等的 AutoMigrate。
+	if err := database.Migrate(db, 30*time.Second, &model.User{}); err != nil {
 		log.Fatal("auto migrate failed", zap.Error(err))
 	}
 	repo := repository.NewGormRepository(db)

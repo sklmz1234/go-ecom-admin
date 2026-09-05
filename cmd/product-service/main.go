@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -20,6 +21,7 @@ import (
 	"gorm.io/gorm"
 
 	"go-ecom-admin/pkg/config"
+	"go-ecom-admin/pkg/database"
 	"go-ecom-admin/pkg/logger"
 
 	"go-ecom-admin/internal/product/model"
@@ -55,7 +57,8 @@ func main() {
 	if err != nil {
 		log.Fatal("failed to connect to MySQL", zap.Error(err))
 	}
-	if err := db.AutoMigrate(&model.Product{}); err != nil {
+	// 带锁迁移，理由见 cmd/user-service/main.go：多副本并发建表竞态。
+	if err := database.Migrate(db, 30*time.Second, &model.Product{}); err != nil {
 		log.Fatal("auto migrate failed", zap.Error(err))
 	}
 	repo := repository.NewGormRepository(db)
