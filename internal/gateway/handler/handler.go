@@ -11,6 +11,7 @@ import (
 
 	apperrors "go-ecom-admin/pkg/errors"
 
+	"go-ecom-admin/internal/gateway/middleware"
 	"go-ecom-admin/internal/gateway/model"
 	"go-ecom-admin/internal/gateway/service"
 )
@@ -91,7 +92,15 @@ func (h *Handler) CreateProduct(c *gin.Context) {
 		return
 	}
 
-	product, err := h.svc.CreateProduct(c.Request.Context(), req)
+	userID, ok := middleware.UserIDFromContext(c)
+	if !ok {
+		// 路由上挂了 Auth 中间件时这里永远走不到——这是一次防御性检查：
+		// 万一以后有人把写路由挂到 auth 组外面，至少不会带着"零身份"调到下游。
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing caller identity"})
+		return
+	}
+
+	product, err := h.svc.CreateProduct(c.Request.Context(), userID, req)
 	if err != nil {
 		h.respondGRPCError(c, err)
 		return
@@ -127,7 +136,13 @@ func (h *Handler) UpdateProduct(c *gin.Context) {
 		return
 	}
 
-	product, err := h.svc.UpdateProduct(c.Request.Context(), id, req)
+	userID, ok := middleware.UserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing caller identity"})
+		return
+	}
+
+	product, err := h.svc.UpdateProduct(c.Request.Context(), userID, id, req)
 	if err != nil {
 		h.respondGRPCError(c, err)
 		return
@@ -142,7 +157,13 @@ func (h *Handler) DeleteProduct(c *gin.Context) {
 		return
 	}
 
-	if err := h.svc.DeleteProduct(c.Request.Context(), id); err != nil {
+	userID, ok := middleware.UserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing caller identity"})
+		return
+	}
+
+	if err := h.svc.DeleteProduct(c.Request.Context(), userID, id); err != nil {
 		h.respondGRPCError(c, err)
 		return
 	}

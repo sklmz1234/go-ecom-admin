@@ -43,6 +43,10 @@ type ProductDTO struct {
 	Name      string  `json:"name"`
 	PriceYuan float64 `json:"price_yuan"`
 	Stock     int32   `json:"stock"`
+	// OwnerID 暴露给前端是为了让它判断"这个商品是不是当前登录用户的"，
+	// 从而决定要不要渲染编辑/删除按钮。注意这只是展示层的便利——真正的
+	// 权限裁决永远在 product-service 内部，前端藏按钮挡不住构造请求的人。
+	OwnerID   uint64  `json:"owner_id"`
 	CreatedAt int64   `json:"created_at"`
 }
 

@@ -5,6 +5,9 @@ package service
 
 import (
 	"context"
+	"strconv"
+
+	"google.golang.org/grpc/metadata"
 
 	"go-ecom-admin/internal/gateway/model"
 	"go-ecom-admin/internal/gateway/repository"
@@ -19,6 +22,19 @@ type Service struct {
 
 func New(userClient *repository.UserClient, productClient *repository.ProductClient) *Service {
 	return &Service{userClient: userClient, productClient: productClient}
+}
+
+// metadataKeyUserID 与 product-service 侧读取时使用的 key 保持一致。
+// 身份走 metadata 而不是 proto 字段：身份是"横切关注点"，和 JWT 放在
+// HTTP header 而不是塞 body 是同一个道理——每个 proto message 都加一个
+// user_id 字段既重复又容易漏，metadata 由调用链统一注入，业务消息保持干净。
+const metadataKeyUserID = "user_id"
+
+// withCallerIdentity 把"当前登录用户是谁"附加到 outgoing context 上，随
+// gRPC 调用一起传给下游服务。这是 gateway 作为"认证边界"的核心职责：
+// JWT 在这里验完，下游服务只认 metadata 里的 user_id，不再各自验签。
+func withCallerIdentity(ctx context.Context, userID uint64) context.Context {
+	return metadata.AppendToOutgoingContext(ctx, metadataKeyUserID, strconv.FormatUint(userID, 10))
 }
 
 func (s *Service) GetUser(ctx context.Context, id uint64) (*model.UserDTO, error) {
@@ -53,29 +69,32 @@ func (s *Service) GetProduct(ctx context.Context, id uint64) (*model.ProductDTO,
 	return productToDTO(p), nil
 }
 
-func (s *Service) CreateProduct(ctx context.Context, req model.CreateProductRequest) (*model.ProductDTO, error) {
+// CreateProduct / UpdateProduct / DeleteProduct 是写路径，必须带调用方身份——
+// userID 由 handler 从 gin.Context 取（JWT 中间件已验过签），这里注入 metadata。
+// 读路径（Get/List）是公开的，不需要身份。
+func (s *Service) CreateProduct(ctx context.Context, userID uint64, req model.CreateProductRequest) (*model.ProductDTO, error) {
 	// 元 -> 分：四舍五入到分，避免浮点数直接乘出现的精度误差被带进下游服务。
 	priceCents := int64(req.PriceYuan*100 + 0.5)
 
-	p, err := s.productClient.CreateProduct(ctx, req.Name, priceCents, req.Stock)
+	p, err := s.productClient.CreateProduct(withCallerIdentity(ctx, userID), req.Name, priceCents, req.Stock)
 	if err != nil {
 		return nil, err
 	}
 	return productToDTO(p), nil
 }
 
-func (s *Service) UpdateProduct(ctx context.Context, id uint64, req model.UpdateProductRequest) (*model.ProductDTO, error) {
+func (s *Service) UpdateProduct(ctx context.Context, userID, id uint64, req model.UpdateProductRequest) (*model.ProductDTO, error) {
 	priceCents := int64(req.PriceYuan*100 + 0.5)
 
-	p, err := s.productClient.UpdateProduct(ctx, id, req.Name, priceCents, req.Stock)
+	p, err := s.productClient.UpdateProduct(withCallerIdentity(ctx, userID), id, req.Name, priceCents, req.Stock)
 	if err != nil {
 		return nil, err
 	}
 	return productToDTO(p), nil
 }
 
-func (s *Service) DeleteProduct(ctx context.Context, id uint64) error {
-	return s.productClient.DeleteProduct(ctx, id)
+func (s *Service) DeleteProduct(ctx context.Context, userID, id uint64) error {
+	return s.productClient.DeleteProduct(withCallerIdentity(ctx, userID), id)
 }
 
 func (s *Service) ListProducts(ctx context.Context, req model.ListProductsRequest) (*model.ListProductsResponse, error) {
@@ -107,6 +126,7 @@ func productToDTO(p *productpb.Product) *model.ProductDTO {
 		Name:      p.GetName(),
 		PriceYuan: float64(p.GetPriceCents()) / 100,
 		Stock:     p.GetStock(),
+		OwnerID:   p.GetOwnerId(),
 		CreatedAt: p.GetCreatedAt(),
 	}
 }

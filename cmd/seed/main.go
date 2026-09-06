@@ -102,11 +102,14 @@ func main() {
 	}
 
 	products := make([]*productmodel.Product, 0, len(productNames))
-	for _, name := range productNames {
+	for i, name := range productNames {
 		products = append(products, &productmodel.Product{
 			Name:       name,
 			PriceCents: int64(1990 + rand.Intn(9990-1990+1)),
 			Stock:      int32(rand.Intn(501)),
+			// 商品轮流归属到 10 个种子用户，联调时任意登录一个账号
+			// 都能改/删到"自己的"商品，也能撞到别人的商品验证 403。
+			OwnerID: users[i%len(users)].ID,
 		})
 	}
 	if err := db.Create(&products).Error; err != nil {
@@ -121,6 +124,6 @@ func main() {
 
 	fmt.Println("seeded products:")
 	for _, p := range products {
-		fmt.Printf("  id=%d name=%s price=%.2f元 stock=%d\n", p.ID, p.Name, float64(p.PriceCents)/100, p.Stock)
+		fmt.Printf("  id=%d name=%s price=%.2f元 stock=%d owner_id=%d\n", p.ID, p.Name, float64(p.PriceCents)/100, p.Stock, p.OwnerID)
 	}
 }
