@@ -4,9 +4,20 @@ package router
 
 import (
 	"github.com/gin-gonic/gin"
+	"golang.org/x/time/rate"
 
 	"go-ecom-admin/internal/gateway/handler"
 	"go-ecom-admin/internal/gateway/middleware"
+)
+
+// 限流参数：每 IP 每秒补 10 个令牌，桶容量 20（允许 20 个请求的瞬时突发）。
+// 取值思路：正常浏览商品的频率远低于 10 QPS，这个额度对真实用户无感，
+// 但能挡住脚本对 /auth/login 这类重接口（bcrypt 校验约 100ms/次）的暴破。
+// 学习项目先用常量；生产上应该进 config，配合多副本还要换 Redis 分布式限流
+// （理由见 ratelimit.go 里 ipRateLimiter 的注释）。
+const (
+	rateLimitPerSecond rate.Limit = 10
+	rateLimitBurst                 = 20
 )
 
 // New 需要 jwtSecret 才能组装出鉴权中间件——路由表是唯一决定"哪些接口
@@ -15,6 +26,9 @@ import (
 func New(h *handler.Handler, jwtSecret string) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
+	// 限流是所有中间件里最外层的一道：比 JWT 验签更早执行才省钱，
+	// 且未登录接口（/auth/login）也受它保护。
+	r.Use(middleware.RateLimit(rateLimitPerSecond, rateLimitBurst))
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})

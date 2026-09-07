@@ -68,4 +68,9 @@ message Product {
   int64 price_cents = 3;
   int32 stock = 4;
   int64 created_at = 5;
+  // owner_id 是创建者的用户 ID，由 product-service 从 gRPC metadata 的
+  // user_id 写入——客户端传不了也改不了它。归属校验（Update/Delete 只能
+  // 操作自己的商品）依据就是这个字段，所以它必须出现在响应里，前端
+  // 才能知道"这个商品是不是我的、要不要显示编辑按钮"。
+  uint64 owner_id = 6;
 }

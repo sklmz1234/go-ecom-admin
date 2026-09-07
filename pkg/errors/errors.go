@@ -25,6 +25,7 @@ const (
 	CodeAlreadyExists
 	CodeInternal
 	CodeUnauthorized
+	CodeForbidden
 )
 
 // AppError 是本项目统一的错误载体：Code 供上层做分支判断，
@@ -75,6 +76,14 @@ func Unauthorized(message string, cause error) *AppError {
 	return New(CodeUnauthorized, message, cause)
 }
 
+// Forbidden 用于「已认证但无权操作」：身份是真的（JWT 有效、user_id 可信），
+// 但这个身份对目标资源没有权限——典型场景是"想改别人创建的商品"。
+// 和 Unauthorized 的区别要在响应码上体现出来：401 是"你是谁？"，
+// 403 是"我知道你是谁，但你不能这么做"。
+func Forbidden(message string, cause error) *AppError {
+	return New(CodeForbidden, message, cause)
+}
+
 // ToGRPCStatus 供 user-service / product-service 的 gRPC handler 使用，
 // 把内部 AppError 转换成客户端能识别的标准 gRPC status。
 func ToGRPCStatus(err error) error {
@@ -96,6 +105,8 @@ func ToGRPCStatus(err error) error {
 		return status.Error(codes.AlreadyExists, appErr.Message)
 	case CodeUnauthorized:
 		return status.Error(codes.Unauthenticated, appErr.Message)
+	case CodeForbidden:
+		return status.Error(codes.PermissionDenied, appErr.Message)
 	default:
 		// 不把 appErr.Err（可能包含 SQL 语句/驱动报错）透传给客户端，
 		// 完整信息已经在 service 层落日志，这里只暴露安全的提示文案。
@@ -121,6 +132,8 @@ func ToHTTPStatus(err error) (int, string) {
 		return http.StatusConflict, st.Message()
 	case codes.Unauthenticated:
 		return http.StatusUnauthorized, st.Message()
+	case codes.PermissionDenied:
+		return http.StatusForbidden, st.Message()
 	case codes.OK:
 		return http.StatusOK, ""
 	default:

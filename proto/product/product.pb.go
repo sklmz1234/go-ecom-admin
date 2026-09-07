@@ -514,12 +514,17 @@ func (x *ListProductsResponse) GetTotal() int64 {
 }
 
 type Product struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	PriceCents    int64                  `protobuf:"varint,3,opt,name=price_cents,json=priceCents,proto3" json:"price_cents,omitempty"`
-	Stock         int32                  `protobuf:"varint,4,opt,name=stock,proto3" json:"stock,omitempty"`
-	CreatedAt     int64                  `protobuf:"varint,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Id         uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name       string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	PriceCents int64                  `protobuf:"varint,3,opt,name=price_cents,json=priceCents,proto3" json:"price_cents,omitempty"`
+	Stock      int32                  `protobuf:"varint,4,opt,name=stock,proto3" json:"stock,omitempty"`
+	CreatedAt  int64                  `protobuf:"varint,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// owner_id 是创建者的用户 ID，由 product-service 从 gRPC metadata 的
+	// user_id 写入——客户端传不了也改不了它。归属校验（Update/Delete 只能
+	// 操作自己的商品）依据就是这个字段，所以它必须出现在响应里，前端
+	// 才能知道"这个商品是不是我的、要不要显示编辑按钮"。
+	OwnerId       uint64 `protobuf:"varint,6,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -589,6 +594,13 @@ func (x *Product) GetCreatedAt() int64 {
 	return 0
 }
 
+func (x *Product) GetOwnerId() uint64 {
+	if x != nil {
+		return x.OwnerId
+	}
+	return 0
+}
+
 var File_proto_product_product_proto protoreflect.FileDescriptor
 
 const file_proto_product_product_proto_rawDesc = "" +
@@ -621,7 +633,7 @@ const file_proto_product_product_proto_rawDesc = "" +
 	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\"Z\n" +
 	"\x14ListProductsResponse\x12,\n" +
 	"\bproducts\x18\x01 \x03(\v2\x10.product.ProductR\bproducts\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x03R\x05total\"\x83\x01\n" +
+	"\x05total\x18\x02 \x01(\x03R\x05total\"\x9e\x01\n" +
 	"\aProduct\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1f\n" +
@@ -629,7 +641,8 @@ const file_proto_product_product_proto_rawDesc = "" +
 	"priceCents\x12\x14\n" +
 	"\x05stock\x18\x04 \x01(\x05R\x05stock\x12\x1d\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\x03R\tcreatedAt2\x94\x03\n" +
+	"created_at\x18\x05 \x01(\x03R\tcreatedAt\x12\x19\n" +
+	"\bowner_id\x18\x06 \x01(\x04R\aownerId2\x94\x03\n" +
 	"\x0eProductService\x12E\n" +
 	"\n" +
 	"GetProduct\x12\x1a.product.GetProductRequest\x1a\x1b.product.GetProductResponse\x12N\n" +
