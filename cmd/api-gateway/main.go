@@ -87,8 +87,12 @@ func main() {
 	if err != nil {
 		log.Fatal("failed to create product-service client", zap.Error(err))
 	}
+	orderClient, err := repository.NewOrderClient(cfg.GRPCClient.OrderServiceAddr)
+	if err != nil {
+		log.Fatal("failed to create order-service client", zap.Error(err))
+	}
 
-	svc := service.New(userClient, productClient)
+	svc := service.New(userClient, productClient, orderClient)
 	h := handler.New(svc, log)
 	engine := router.New(h, cfg.JWT.Secret, log, metricsHandler)
 

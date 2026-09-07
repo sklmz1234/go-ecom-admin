@@ -75,3 +75,45 @@ type ListProductsResponse struct {
 	Products []*ProductDTO `json:"products"`
 	Total    int64         `json:"total"`
 }
+
+// —— 订单（阶段 3）——
+
+// OrderItemDTO 是订单明细的 REST 视图。UnitPriceYuan 是下单时刻的价格快照
+// （分 → 元的换算同样是 gateway 的职责），商品以后改价不影响这里。
+type OrderItemDTO struct {
+	ProductID     uint64  `json:"product_id"`
+	ProductName   string  `json:"product_name"`
+	Quantity      int32   `json:"quantity"`
+	UnitPriceYuan float64 `json:"unit_price_yuan"`
+}
+
+// OrderDTO 是暴露给 REST 客户端的订单视图。
+type OrderDTO struct {
+	ID         uint64         `json:"id"`
+	UserID     uint64         `json:"user_id"`
+	Status     string         `json:"status"` // PENDING / PAID / CANCELLED
+	TotalYuan  float64        `json:"total_yuan"`
+	Items      []*OrderItemDTO `json:"items,omitempty"`
+	CreatedAt  int64          `json:"created_at"`
+}
+
+// CreateOrderRequest 对应 POST /api/v1/orders。注意请求里**没有价格字段**——
+// 价格只能由 product-service 在扣减时刻给出快照，客户端报价一分都不能信。
+type CreateOrderRequest struct {
+	Items []*CreateOrderItem `json:"items" binding:"required,min=1,dive"`
+}
+
+type CreateOrderItem struct {
+	ProductID uint64 `json:"product_id" binding:"required"`
+	Quantity  int32  `json:"quantity" binding:"required,gt=0"`
+}
+
+type ListOrdersRequest struct {
+	Page     int `form:"page,default=1"`
+	PageSize int `form:"page_size,default=20"`
+}
+
+type ListOrdersResponse struct {
+	Orders []*OrderDTO `json:"orders"`
+	Total  int64       `json:"total"`
+}

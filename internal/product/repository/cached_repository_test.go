@@ -46,6 +46,20 @@ func (f *countingRepo) List(ctx context.Context, page, pageSize int) ([]*model.P
 	return nil, 0, nil
 }
 
+func (f *countingRepo) DeductStock(ctx context.Context, productID uint64, quantity int32) (*model.Product, error) {
+	if f.product == nil {
+		return nil, apperrors.NotFound("product not found", nil)
+	}
+	return f.product, nil
+}
+
+func (f *countingRepo) RestoreStock(ctx context.Context, productID uint64, quantity int32) (*model.Product, error) {
+	if f.product == nil {
+		return nil, apperrors.NotFound("product not found", nil)
+	}
+	return f.product, nil
+}
+
 // setup 起一台内存假 Redis（miniredis），返回装饰器和它的组件。
 // miniredis 让单测不依赖真 Redis，CI/本地都能跑——和 sqlite :memory: 测 GORM 同一思路。
 func setup(t *testing.T, next Repository) (*cachedRepository, *miniredis.Miniredis) {
@@ -128,6 +142,37 @@ func TestCachedRepository_Delete_InvalidatesCache(t *testing.T) {
 	err = repo.Delete(ctx, 42)
 	require.NoError(t, err)
 	assert.False(t, mr.Exists(productKey(42)), "Delete 后缓存 key 应被删除")
+}
+
+// 阶段 3：扣库存后缓存必须失效——否则下单成功后商品详情页的 stock
+// 还是旧值，最长脏读 30 分钟（productCacheTTL）。
+func TestCachedRepository_DeductStock_InvalidatesCache(t *testing.T) {
+	next := &countingRepo{product: testProduct}
+	repo, mr := setup(t, next)
+	ctx := context.Background()
+
+	_, err := repo.GetByID(ctx, 42) // 让缓存里先有旧值
+	require.NoError(t, err)
+	require.True(t, mr.Exists(productKey(42)))
+
+	_, err = repo.DeductStock(ctx, 42, 1)
+	require.NoError(t, err)
+	assert.False(t, mr.Exists(productKey(42)), "DeductStock 后缓存 key 应被删除")
+}
+
+// 回补库存同理。
+func TestCachedRepository_RestoreStock_InvalidatesCache(t *testing.T) {
+	next := &countingRepo{product: testProduct}
+	repo, mr := setup(t, next)
+	ctx := context.Background()
+
+	_, err := repo.GetByID(ctx, 42)
+	require.NoError(t, err)
+	require.True(t, mr.Exists(productKey(42)))
+
+	_, err = repo.RestoreStock(ctx, 42, 1)
+	require.NoError(t, err)
+	assert.False(t, mr.Exists(productKey(42)), "RestoreStock 后缓存 key 应被删除")
 }
 
 // 防击穿：N 个并发请求同时打同一个未缓存的 key，

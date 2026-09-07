@@ -78,6 +78,13 @@ func New(h *handler.Handler, jwtSecret string, log *zap.Logger, metricsHandler h
 		products.POST("", auth, h.CreateProduct)
 		products.PUT("/:id", auth, h.UpdateProduct)
 		products.DELETE("/:id", auth, h.DeleteProduct)
+
+		// 订单（阶段 3）全部要求登录，没有公开读——订单是私密资源，
+		// 连"浏览"都必须是自己的订单。
+		orders := api.Group("/orders")
+		orders.POST("", auth, h.CreateOrder)
+		orders.GET("", auth, h.ListMyOrders)
+		orders.GET("/:id", auth, h.GetOrder)
 	}
 
 	return r

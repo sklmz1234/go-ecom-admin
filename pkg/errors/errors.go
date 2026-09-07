@@ -26,6 +26,7 @@ const (
 	CodeInternal
 	CodeUnauthorized
 	CodeForbidden
+	CodeFailedPrecondition
 )
 
 // AppError 是本项目统一的错误载体：Code 供上层做分支判断，
@@ -84,6 +85,13 @@ func Forbidden(message string, cause error) *AppError {
 	return New(CodeForbidden, message, cause)
 }
 
+// FailedPrecondition 用于「请求本身合法，但资源的当前状态不允许这个操作」——
+// 典型场景是库存不足：不是配额问题（那是 ResourceExhausted），也不是参数错误
+// （InvalidArgument），而是"你买的这件商品现在没货了"。HTTP 侧映射 409 Conflict。
+func FailedPrecondition(message string, cause error) *AppError {
+	return New(CodeFailedPrecondition, message, cause)
+}
+
 // ToGRPCStatus 供 user-service / product-service 的 gRPC handler 使用，
 // 把内部 AppError 转换成客户端能识别的标准 gRPC status。
 func ToGRPCStatus(err error) error {
@@ -107,6 +115,8 @@ func ToGRPCStatus(err error) error {
 		return status.Error(codes.Unauthenticated, appErr.Message)
 	case CodeForbidden:
 		return status.Error(codes.PermissionDenied, appErr.Message)
+	case CodeFailedPrecondition:
+		return status.Error(codes.FailedPrecondition, appErr.Message)
 	default:
 		// 不把 appErr.Err（可能包含 SQL 语句/驱动报错）透传给客户端，
 		// 完整信息已经在 service 层落日志，这里只暴露安全的提示文案。
@@ -134,6 +144,9 @@ func ToHTTPStatus(err error) (int, string) {
 		return http.StatusUnauthorized, st.Message()
 	case codes.PermissionDenied:
 		return http.StatusForbidden, st.Message()
+	case codes.FailedPrecondition:
+		// 库存不足这类"状态冲突"语义，HTTP 世界的对应物是 409。
+		return http.StatusConflict, st.Message()
 	case codes.OK:
 		return http.StatusOK, ""
 	default:

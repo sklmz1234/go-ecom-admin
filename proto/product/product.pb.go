@@ -513,6 +513,229 @@ func (x *ListProductsResponse) GetTotal() int64 {
 	return 0
 }
 
+// DeductStock 防超卖的核心契约：服务端用一条条件更新 SQL 原子完成
+// （UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?），
+// RowsAffected == 0 即库存不足，返回 FailedPrecondition——数据库是唯一真相源，
+// 不存在"先查后改"的 TOCTOU 窗口。
+type DeductStockRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ProductId     uint64                 `protobuf:"varint,1,opt,name=product_id,json=productId,proto3" json:"product_id,omitempty"`
+	Quantity      int32                  `protobuf:"varint,2,opt,name=quantity,proto3" json:"quantity,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeductStockRequest) Reset() {
+	*x = DeductStockRequest{}
+	mi := &file_proto_product_product_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeductStockRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeductStockRequest) ProtoMessage() {}
+
+func (x *DeductStockRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_product_product_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeductStockRequest.ProtoReflect.Descriptor instead.
+func (*DeductStockRequest) Descriptor() ([]byte, []int) {
+	return file_proto_product_product_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *DeductStockRequest) GetProductId() uint64 {
+	if x != nil {
+		return x.ProductId
+	}
+	return 0
+}
+
+func (x *DeductStockRequest) GetQuantity() int32 {
+	if x != nil {
+		return x.Quantity
+	}
+	return 0
+}
+
+// DeductStockResponse 除了扣减后的剩余库存，还带回扣减时刻的 price_cents / name
+// 快照：下单方（order-service）需要把"下单时的价格"写进 OrderItem.unit_price_cents
+// ——商品价格以后会改，订单金额不能跟着变。一次调用拿全，避免"先 GetProduct 再
+// DeductStock"的两次往返和更大的价格竞态窗口。
+// （严格说 UPDATE 扣减后再读价格仍有理论竞态：扣减成功与读取之间商品被改价，
+// 快照会是新价。学习项目量级无感；真要原子快照需要 SELECT ... FOR UPDATE
+// 或把价格写进库存行同事务读取，面试可展开这层权衡。）
+type DeductStockResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	RemainingStock int32                  `protobuf:"varint,1,opt,name=remaining_stock,json=remainingStock,proto3" json:"remaining_stock,omitempty"`
+	PriceCents     int64                  `protobuf:"varint,2,opt,name=price_cents,json=priceCents,proto3" json:"price_cents,omitempty"`
+	Name           string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *DeductStockResponse) Reset() {
+	*x = DeductStockResponse{}
+	mi := &file_proto_product_product_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeductStockResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeductStockResponse) ProtoMessage() {}
+
+func (x *DeductStockResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_product_product_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeductStockResponse.ProtoReflect.Descriptor instead.
+func (*DeductStockResponse) Descriptor() ([]byte, []int) {
+	return file_proto_product_product_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *DeductStockResponse) GetRemainingStock() int32 {
+	if x != nil {
+		return x.RemainingStock
+	}
+	return 0
+}
+
+func (x *DeductStockResponse) GetPriceCents() int64 {
+	if x != nil {
+		return x.PriceCents
+	}
+	return 0
+}
+
+func (x *DeductStockResponse) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+// RestoreStock 是 DeductStock 的补偿操作（Saga 回滚）：下单编排中后续步骤失败时
+// 由 order-service 调用，无条件加回库存。它是幂等不安全的（重复调用会重复加），
+// 调用方必须保证"一次成功的 Deduct 最多对应一次 Restore"——学习项目做到补偿为止，
+// 生产需要重试 + 对账兜底。
+type RestoreStockRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ProductId     uint64                 `protobuf:"varint,1,opt,name=product_id,json=productId,proto3" json:"product_id,omitempty"`
+	Quantity      int32                  `protobuf:"varint,2,opt,name=quantity,proto3" json:"quantity,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RestoreStockRequest) Reset() {
+	*x = RestoreStockRequest{}
+	mi := &file_proto_product_product_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RestoreStockRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RestoreStockRequest) ProtoMessage() {}
+
+func (x *RestoreStockRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_product_product_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RestoreStockRequest.ProtoReflect.Descriptor instead.
+func (*RestoreStockRequest) Descriptor() ([]byte, []int) {
+	return file_proto_product_product_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *RestoreStockRequest) GetProductId() uint64 {
+	if x != nil {
+		return x.ProductId
+	}
+	return 0
+}
+
+func (x *RestoreStockRequest) GetQuantity() int32 {
+	if x != nil {
+		return x.Quantity
+	}
+	return 0
+}
+
+type RestoreStockResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	RemainingStock int32                  `protobuf:"varint,1,opt,name=remaining_stock,json=remainingStock,proto3" json:"remaining_stock,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *RestoreStockResponse) Reset() {
+	*x = RestoreStockResponse{}
+	mi := &file_proto_product_product_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RestoreStockResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RestoreStockResponse) ProtoMessage() {}
+
+func (x *RestoreStockResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_product_product_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RestoreStockResponse.ProtoReflect.Descriptor instead.
+func (*RestoreStockResponse) Descriptor() ([]byte, []int) {
+	return file_proto_product_product_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *RestoreStockResponse) GetRemainingStock() int32 {
+	if x != nil {
+		return x.RemainingStock
+	}
+	return 0
+}
+
 type Product struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	Id         uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -531,7 +754,7 @@ type Product struct {
 
 func (x *Product) Reset() {
 	*x = Product{}
-	mi := &file_proto_product_product_proto_msgTypes[10]
+	mi := &file_proto_product_product_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -543,7 +766,7 @@ func (x *Product) String() string {
 func (*Product) ProtoMessage() {}
 
 func (x *Product) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_product_product_proto_msgTypes[10]
+	mi := &file_proto_product_product_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -556,7 +779,7 @@ func (x *Product) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Product.ProtoReflect.Descriptor instead.
 func (*Product) Descriptor() ([]byte, []int) {
-	return file_proto_product_product_proto_rawDescGZIP(), []int{10}
+	return file_proto_product_product_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Product) GetId() uint64 {
@@ -633,7 +856,22 @@ const file_proto_product_product_proto_rawDesc = "" +
 	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\"Z\n" +
 	"\x14ListProductsResponse\x12,\n" +
 	"\bproducts\x18\x01 \x03(\v2\x10.product.ProductR\bproducts\x12\x14\n" +
-	"\x05total\x18\x02 \x01(\x03R\x05total\"\x9e\x01\n" +
+	"\x05total\x18\x02 \x01(\x03R\x05total\"O\n" +
+	"\x12DeductStockRequest\x12\x1d\n" +
+	"\n" +
+	"product_id\x18\x01 \x01(\x04R\tproductId\x12\x1a\n" +
+	"\bquantity\x18\x02 \x01(\x05R\bquantity\"s\n" +
+	"\x13DeductStockResponse\x12'\n" +
+	"\x0fremaining_stock\x18\x01 \x01(\x05R\x0eremainingStock\x12\x1f\n" +
+	"\vprice_cents\x18\x02 \x01(\x03R\n" +
+	"priceCents\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\"P\n" +
+	"\x13RestoreStockRequest\x12\x1d\n" +
+	"\n" +
+	"product_id\x18\x01 \x01(\x04R\tproductId\x12\x1a\n" +
+	"\bquantity\x18\x02 \x01(\x05R\bquantity\"?\n" +
+	"\x14RestoreStockResponse\x12'\n" +
+	"\x0fremaining_stock\x18\x01 \x01(\x05R\x0eremainingStock\"\x9e\x01\n" +
 	"\aProduct\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1f\n" +
@@ -642,14 +880,16 @@ const file_proto_product_product_proto_rawDesc = "" +
 	"\x05stock\x18\x04 \x01(\x05R\x05stock\x12\x1d\n" +
 	"\n" +
 	"created_at\x18\x05 \x01(\x03R\tcreatedAt\x12\x19\n" +
-	"\bowner_id\x18\x06 \x01(\x04R\aownerId2\x94\x03\n" +
+	"\bowner_id\x18\x06 \x01(\x04R\aownerId2\xab\x04\n" +
 	"\x0eProductService\x12E\n" +
 	"\n" +
 	"GetProduct\x12\x1a.product.GetProductRequest\x1a\x1b.product.GetProductResponse\x12N\n" +
 	"\rCreateProduct\x12\x1d.product.CreateProductRequest\x1a\x1e.product.CreateProductResponse\x12N\n" +
 	"\rUpdateProduct\x12\x1d.product.UpdateProductRequest\x1a\x1e.product.UpdateProductResponse\x12N\n" +
 	"\rDeleteProduct\x12\x1d.product.DeleteProductRequest\x1a\x1e.product.DeleteProductResponse\x12K\n" +
-	"\fListProducts\x12\x1c.product.ListProductsRequest\x1a\x1d.product.ListProductsResponseB'Z%go-ecom-admin/proto/product;productpbb\x06proto3"
+	"\fListProducts\x12\x1c.product.ListProductsRequest\x1a\x1d.product.ListProductsResponse\x12H\n" +
+	"\vDeductStock\x12\x1b.product.DeductStockRequest\x1a\x1c.product.DeductStockResponse\x12K\n" +
+	"\fRestoreStock\x12\x1c.product.RestoreStockRequest\x1a\x1d.product.RestoreStockResponseB'Z%go-ecom-admin/proto/product;productpbb\x06proto3"
 
 var (
 	file_proto_product_product_proto_rawDescOnce sync.Once
@@ -663,7 +903,7 @@ func file_proto_product_product_proto_rawDescGZIP() []byte {
 	return file_proto_product_product_proto_rawDescData
 }
 
-var file_proto_product_product_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_proto_product_product_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_proto_product_product_proto_goTypes = []any{
 	(*GetProductRequest)(nil),     // 0: product.GetProductRequest
 	(*GetProductResponse)(nil),    // 1: product.GetProductResponse
@@ -675,25 +915,33 @@ var file_proto_product_product_proto_goTypes = []any{
 	(*DeleteProductResponse)(nil), // 7: product.DeleteProductResponse
 	(*ListProductsRequest)(nil),   // 8: product.ListProductsRequest
 	(*ListProductsResponse)(nil),  // 9: product.ListProductsResponse
-	(*Product)(nil),               // 10: product.Product
+	(*DeductStockRequest)(nil),    // 10: product.DeductStockRequest
+	(*DeductStockResponse)(nil),   // 11: product.DeductStockResponse
+	(*RestoreStockRequest)(nil),   // 12: product.RestoreStockRequest
+	(*RestoreStockResponse)(nil),  // 13: product.RestoreStockResponse
+	(*Product)(nil),               // 14: product.Product
 }
 var file_proto_product_product_proto_depIdxs = []int32{
-	10, // 0: product.GetProductResponse.product:type_name -> product.Product
-	10, // 1: product.CreateProductResponse.product:type_name -> product.Product
-	10, // 2: product.UpdateProductResponse.product:type_name -> product.Product
-	10, // 3: product.ListProductsResponse.products:type_name -> product.Product
+	14, // 0: product.GetProductResponse.product:type_name -> product.Product
+	14, // 1: product.CreateProductResponse.product:type_name -> product.Product
+	14, // 2: product.UpdateProductResponse.product:type_name -> product.Product
+	14, // 3: product.ListProductsResponse.products:type_name -> product.Product
 	0,  // 4: product.ProductService.GetProduct:input_type -> product.GetProductRequest
 	2,  // 5: product.ProductService.CreateProduct:input_type -> product.CreateProductRequest
 	4,  // 6: product.ProductService.UpdateProduct:input_type -> product.UpdateProductRequest
 	6,  // 7: product.ProductService.DeleteProduct:input_type -> product.DeleteProductRequest
 	8,  // 8: product.ProductService.ListProducts:input_type -> product.ListProductsRequest
-	1,  // 9: product.ProductService.GetProduct:output_type -> product.GetProductResponse
-	3,  // 10: product.ProductService.CreateProduct:output_type -> product.CreateProductResponse
-	5,  // 11: product.ProductService.UpdateProduct:output_type -> product.UpdateProductResponse
-	7,  // 12: product.ProductService.DeleteProduct:output_type -> product.DeleteProductResponse
-	9,  // 13: product.ProductService.ListProducts:output_type -> product.ListProductsResponse
-	9,  // [9:14] is the sub-list for method output_type
-	4,  // [4:9] is the sub-list for method input_type
+	10, // 9: product.ProductService.DeductStock:input_type -> product.DeductStockRequest
+	12, // 10: product.ProductService.RestoreStock:input_type -> product.RestoreStockRequest
+	1,  // 11: product.ProductService.GetProduct:output_type -> product.GetProductResponse
+	3,  // 12: product.ProductService.CreateProduct:output_type -> product.CreateProductResponse
+	5,  // 13: product.ProductService.UpdateProduct:output_type -> product.UpdateProductResponse
+	7,  // 14: product.ProductService.DeleteProduct:output_type -> product.DeleteProductResponse
+	9,  // 15: product.ProductService.ListProducts:output_type -> product.ListProductsResponse
+	11, // 16: product.ProductService.DeductStock:output_type -> product.DeductStockResponse
+	13, // 17: product.ProductService.RestoreStock:output_type -> product.RestoreStockResponse
+	11, // [11:18] is the sub-list for method output_type
+	4,  // [4:11] is the sub-list for method input_type
 	4,  // [4:4] is the sub-list for extension type_name
 	4,  // [4:4] is the sub-list for extension extendee
 	0,  // [0:4] is the sub-list for field type_name
@@ -710,7 +958,7 @@ func file_proto_product_product_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_product_product_proto_rawDesc), len(file_proto_product_product_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   11,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

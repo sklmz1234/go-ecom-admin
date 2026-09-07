@@ -11,6 +11,8 @@ package repository
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -53,6 +55,101 @@ func TestGetByID_NotFound(t *testing.T) {
 
 	require.Nil(t, p)
 	requireAppCode(t, err, apperrors.CodeNotFound)
+}
+
+func TestDeductStock(t *testing.T) {
+	t.Run("扣减成功并返回剩余库存和价格快照", func(t *testing.T) {
+		repo := NewGormRepository(newSQLiteDB(t))
+		seeded := seedProduct(t, repo, "机械键盘", 19900, 10)
+
+		p, err := repo.DeductStock(context.Background(), seeded.ID, 3)
+
+		require.NoError(t, err)
+		assert.Equal(t, int32(7), p.Stock, "10 - 3 应剩 7")
+		assert.Equal(t, int64(19900), p.PriceCents, "下单方需要扣减时刻的价格快照")
+		assert.Equal(t, "机械键盘", p.Name)
+	})
+
+	t.Run("库存不足返回FailedPrecondition且库存不变", func(t *testing.T) {
+		repo := NewGormRepository(newSQLiteDB(t))
+		seeded := seedProduct(t, repo, "机械键盘", 19900, 2)
+
+		_, err := repo.DeductStock(context.Background(), seeded.ID, 3)
+
+		requireAppCode(t, err, apperrors.CodeFailedPrecondition)
+		p, gErr := repo.GetByID(context.Background(), seeded.ID)
+		require.NoError(t, gErr)
+		assert.Equal(t, int32(2), p.Stock, "扣减失败不能动库存")
+	})
+
+	t.Run("商品不存在返回NotFound而不是库存不足", func(t *testing.T) {
+		repo := NewGormRepository(newSQLiteDB(t))
+
+		_, err := repo.DeductStock(context.Background(), 999, 1)
+
+		requireAppCode(t, err, apperrors.CodeNotFound)
+	})
+}
+
+func TestRestoreStock(t *testing.T) {
+	t.Run("回补后库存恢复", func(t *testing.T) {
+		repo := NewGormRepository(newSQLiteDB(t))
+		seeded := seedProduct(t, repo, "机械键盘", 19900, 10)
+
+		_, err := repo.DeductStock(context.Background(), seeded.ID, 3)
+		require.NoError(t, err)
+		p, err := repo.RestoreStock(context.Background(), seeded.ID, 3)
+
+		require.NoError(t, err)
+		assert.Equal(t, int32(10), p.Stock)
+	})
+
+	t.Run("商品不存在返回NotFound", func(t *testing.T) {
+		repo := NewGormRepository(newSQLiteDB(t))
+
+		_, err := repo.RestoreStock(context.Background(), 999, 1)
+
+		requireAppCode(t, err, apperrors.CodeNotFound)
+	})
+}
+
+// TestDeductStock_Concurrent 是防超卖的核心测试：stock=10 的商品，
+// 50 个 goroutine 各抢 1 件，断言成功数恰好 10、stock 终值 0。
+//
+// sqlite 注意事项：glebarez 的 :memory: 每个连接是独立一库，并发测试必须
+// SetMaxOpenConns(1) 让所有 goroutine 共享同一个连接（同一个库），否则会报
+// "no such table"。串行执行不影响测试目标——原子性由条件更新的 WHERE
+// stock >= ? 保证而不是由并发度保证，50 个 UPDATE 串行跑完仍然只有 10 个
+// 能满足条件。对 MySQL 真实行锁行为的验证留给集成测试（docker 起 MySQL）。
+func TestDeductStock_Concurrent(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Product{}))
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+
+	repo := NewGormRepository(db)
+	seeded := seedProduct(t, repo, "秒杀商品", 9900, 10)
+
+	const goroutines = 50
+	var wg sync.WaitGroup
+	var successes atomic.Int32
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := repo.DeductStock(context.Background(), seeded.ID, 1); err == nil {
+				successes.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, int32(10), successes.Load(), "50 人抢 10 件，恰好 10 人成功")
+	p, err := repo.GetByID(context.Background(), seeded.ID)
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), p.Stock, "库存终值必须是 0，不能为负")
 }
 
 func TestUpdate(t *testing.T) {

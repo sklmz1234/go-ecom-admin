@@ -137,6 +137,33 @@ func (r *cachedRepository) List(ctx context.Context, page, pageSize int) ([]*mod
 	return r.next.List(ctx, page, pageSize)
 }
 
+// DeductStock / RestoreStock（阶段 3）和 Update 同一模式：先写库再删缓存。
+// 少了这一步，下单扣减后商品详情缓存里的 stock 还是旧值，最长脏读 30 分钟
+// （productCacheTTL）——这是 2C 缓存层留给 3A 的必还债务。
+// 注意快照（price/name/remaining）来自 gorm 层的读回，不经过缓存，
+// 不存在"拿缓存里的旧价格下单"的问题。
+func (r *cachedRepository) DeductStock(ctx context.Context, productID uint64, quantity int32) (*model.Product, error) {
+	p, err := r.next.DeductStock(ctx, productID, quantity)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.rdb.Del(ctx, productKey(productID)).Err(); err != nil {
+		return nil, apperrors.Internal("failed to invalidate product cache", err)
+	}
+	return p, nil
+}
+
+func (r *cachedRepository) RestoreStock(ctx context.Context, productID uint64, quantity int32) (*model.Product, error) {
+	p, err := r.next.RestoreStock(ctx, productID, quantity)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.rdb.Del(ctx, productKey(productID)).Err(); err != nil {
+		return nil, apperrors.Internal("failed to invalidate product cache", err)
+	}
+	return p, nil
+}
+
 // isNotFound 按项目 errors 包的惯例判断 NotFound 语义：
 // errors.As 解出 AppError 再比 Code（errors 包没有暴露哨兵错误，这是项目定的模式）。
 func isNotFound(err error) bool {

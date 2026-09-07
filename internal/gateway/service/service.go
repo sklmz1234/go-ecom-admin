@@ -5,12 +5,11 @@ package service
 
 import (
 	"context"
-	"strconv"
-
-	"google.golang.org/grpc/metadata"
 
 	"go-ecom-admin/internal/gateway/model"
 	"go-ecom-admin/internal/gateway/repository"
+	"go-ecom-admin/pkg/identity"
+	orderpb "go-ecom-admin/proto/order"
 	productpb "go-ecom-admin/proto/product"
 	userpb "go-ecom-admin/proto/user"
 )
@@ -18,23 +17,11 @@ import (
 type Service struct {
 	userClient    *repository.UserClient
 	productClient *repository.ProductClient
+	orderClient   *repository.OrderClient
 }
 
-func New(userClient *repository.UserClient, productClient *repository.ProductClient) *Service {
-	return &Service{userClient: userClient, productClient: productClient}
-}
-
-// metadataKeyUserID 与 product-service 侧读取时使用的 key 保持一致。
-// 身份走 metadata 而不是 proto 字段：身份是"横切关注点"，和 JWT 放在
-// HTTP header 而不是塞 body 是同一个道理——每个 proto message 都加一个
-// user_id 字段既重复又容易漏，metadata 由调用链统一注入，业务消息保持干净。
-const metadataKeyUserID = "user_id"
-
-// withCallerIdentity 把"当前登录用户是谁"附加到 outgoing context 上，随
-// gRPC 调用一起传给下游服务。这是 gateway 作为"认证边界"的核心职责：
-// JWT 在这里验完，下游服务只认 metadata 里的 user_id，不再各自验签。
-func withCallerIdentity(ctx context.Context, userID uint64) context.Context {
-	return metadata.AppendToOutgoingContext(ctx, metadataKeyUserID, strconv.FormatUint(userID, 10))
+func New(userClient *repository.UserClient, productClient *repository.ProductClient, orderClient *repository.OrderClient) *Service {
+	return &Service{userClient: userClient, productClient: productClient, orderClient: orderClient}
 }
 
 func (s *Service) GetUser(ctx context.Context, id uint64) (*model.UserDTO, error) {
@@ -71,12 +58,15 @@ func (s *Service) GetProduct(ctx context.Context, id uint64) (*model.ProductDTO,
 
 // CreateProduct / UpdateProduct / DeleteProduct 是写路径，必须带调用方身份——
 // userID 由 handler 从 gin.Context 取（JWT 中间件已验过签），这里注入 metadata。
+// 身份走 metadata 而不是 proto 字段：身份是"横切关注点"，和 JWT 放在 HTTP
+// header 而不是塞 body 是同一个道理——每个 proto message 都加一个 user_id
+// 字段既重复又容易漏，metadata 由调用链统一注入，业务消息保持干净。
 // 读路径（Get/List）是公开的，不需要身份。
 func (s *Service) CreateProduct(ctx context.Context, userID uint64, req model.CreateProductRequest) (*model.ProductDTO, error) {
 	// 元 -> 分：四舍五入到分，避免浮点数直接乘出现的精度误差被带进下游服务。
 	priceCents := int64(req.PriceYuan*100 + 0.5)
 
-	p, err := s.productClient.CreateProduct(withCallerIdentity(ctx, userID), req.Name, priceCents, req.Stock)
+	p, err := s.productClient.CreateProduct(identity.InjectOutgoing(ctx, userID), req.Name, priceCents, req.Stock)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +76,7 @@ func (s *Service) CreateProduct(ctx context.Context, userID uint64, req model.Cr
 func (s *Service) UpdateProduct(ctx context.Context, userID, id uint64, req model.UpdateProductRequest) (*model.ProductDTO, error) {
 	priceCents := int64(req.PriceYuan*100 + 0.5)
 
-	p, err := s.productClient.UpdateProduct(withCallerIdentity(ctx, userID), id, req.Name, priceCents, req.Stock)
+	p, err := s.productClient.UpdateProduct(identity.InjectOutgoing(ctx, userID), id, req.Name, priceCents, req.Stock)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +84,7 @@ func (s *Service) UpdateProduct(ctx context.Context, userID, id uint64, req mode
 }
 
 func (s *Service) DeleteProduct(ctx context.Context, userID, id uint64) error {
-	return s.productClient.DeleteProduct(withCallerIdentity(ctx, userID), id)
+	return s.productClient.DeleteProduct(identity.InjectOutgoing(ctx, userID), id)
 }
 
 func (s *Service) ListProducts(ctx context.Context, req model.ListProductsRequest) (*model.ListProductsResponse, error) {
@@ -109,6 +99,42 @@ func (s *Service) ListProducts(ctx context.Context, req model.ListProductsReques
 	}
 
 	return &model.ListProductsResponse{Products: dtos, Total: total}, nil
+}
+
+// —— 订单（阶段 3）：三个方法全部要求登录，身份注入走 pkg/identity ——
+
+func (s *Service) CreateOrder(ctx context.Context, userID uint64, req model.CreateOrderRequest) (*model.OrderDTO, error) {
+	items := make([]*orderpb.CreateOrderItem, 0, len(req.Items))
+	for _, it := range req.Items {
+		items = append(items, &orderpb.CreateOrderItem{ProductId: it.ProductID, Quantity: it.Quantity})
+	}
+
+	o, err := s.orderClient.CreateOrder(identity.InjectOutgoing(ctx, userID), items)
+	if err != nil {
+		return nil, err
+	}
+	return orderToDTO(o), nil
+}
+
+func (s *Service) GetOrder(ctx context.Context, userID, id uint64) (*model.OrderDTO, error) {
+	o, err := s.orderClient.GetOrder(identity.InjectOutgoing(ctx, userID), id)
+	if err != nil {
+		return nil, err
+	}
+	return orderToDTO(o), nil
+}
+
+func (s *Service) ListMyOrders(ctx context.Context, userID uint64, req model.ListOrdersRequest) (*model.ListOrdersResponse, error) {
+	orders, total, err := s.orderClient.ListMyOrders(identity.InjectOutgoing(ctx, userID), int32(req.Page), int32(req.PageSize))
+	if err != nil {
+		return nil, err
+	}
+
+	dtos := make([]*model.OrderDTO, 0, len(orders))
+	for _, o := range orders {
+		dtos = append(dtos, orderToDTO(o))
+	}
+	return &model.ListOrdersResponse{Orders: dtos, Total: total}, nil
 }
 
 func userToDTO(u *userpb.User) *model.UserDTO {
@@ -128,5 +154,41 @@ func productToDTO(p *productpb.Product) *model.ProductDTO {
 		Stock:     p.GetStock(),
 		OwnerID:   p.GetOwnerId(),
 		CreatedAt: p.GetCreatedAt(),
+	}
+}
+
+// orderToDTO 把 proto 枚举状态翻译成 REST 字符串，并完成分 → 元换算。
+// 列表接口的 items 可能为空（order-service 的 ListMyOrders 不带明细），
+// omitempty 让两种响应共用一个 DTO。
+func orderToDTO(o *orderpb.Order) *model.OrderDTO {
+	items := make([]*model.OrderItemDTO, 0, len(o.GetItems()))
+	for _, it := range o.GetItems() {
+		items = append(items, &model.OrderItemDTO{
+			ProductID:     it.GetProductId(),
+			ProductName:   it.GetProductName(),
+			Quantity:      it.GetQuantity(),
+			UnitPriceYuan: float64(it.GetUnitPriceCents()) / 100,
+		})
+	}
+	return &model.OrderDTO{
+		ID:        o.GetId(),
+		UserID:    o.GetUserId(),
+		Status:    orderStatusToString(o.GetStatus()),
+		TotalYuan: float64(o.GetTotalCents()) / 100,
+		Items:     items,
+		CreatedAt: o.GetCreatedAt(),
+	}
+}
+
+func orderStatusToString(s orderpb.OrderStatus) string {
+	switch s {
+	case orderpb.OrderStatus_ORDER_STATUS_PENDING:
+		return "PENDING"
+	case orderpb.OrderStatus_ORDER_STATUS_PAID:
+		return "PAID"
+	case orderpb.OrderStatus_ORDER_STATUS_CANCELLED:
+		return "CANCELLED"
+	default:
+		return "UNSPECIFIED"
 	}
 }

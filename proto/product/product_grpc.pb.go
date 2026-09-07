@@ -24,6 +24,8 @@ const (
 	ProductService_UpdateProduct_FullMethodName = "/product.ProductService/UpdateProduct"
 	ProductService_DeleteProduct_FullMethodName = "/product.ProductService/DeleteProduct"
 	ProductService_ListProducts_FullMethodName  = "/product.ProductService/ListProducts"
+	ProductService_DeductStock_FullMethodName   = "/product.ProductService/DeductStock"
+	ProductService_RestoreStock_FullMethodName  = "/product.ProductService/RestoreStock"
 )
 
 // ProductServiceClient is the client API for ProductService service.
@@ -37,6 +39,11 @@ type ProductServiceClient interface {
 	UpdateProduct(ctx context.Context, in *UpdateProductRequest, opts ...grpc.CallOption) (*UpdateProductResponse, error)
 	DeleteProduct(ctx context.Context, in *DeleteProductRequest, opts ...grpc.CallOption) (*DeleteProductResponse, error)
 	ListProducts(ctx context.Context, in *ListProductsRequest, opts ...grpc.CallOption) (*ListProductsResponse, error)
+	// 阶段 3：库存扣减/回补，供 order-service 下单编排调用。
+	// 这两个方法是系统内部调用——只要求 metadata 带身份（审计用），不做归属校验，
+	// 和 Update/Delete 的"只能操作自己的商品"是两种语义（身份用于追责，归属用于授权）。
+	DeductStock(ctx context.Context, in *DeductStockRequest, opts ...grpc.CallOption) (*DeductStockResponse, error)
+	RestoreStock(ctx context.Context, in *RestoreStockRequest, opts ...grpc.CallOption) (*RestoreStockResponse, error)
 }
 
 type productServiceClient struct {
@@ -97,6 +104,26 @@ func (c *productServiceClient) ListProducts(ctx context.Context, in *ListProduct
 	return out, nil
 }
 
+func (c *productServiceClient) DeductStock(ctx context.Context, in *DeductStockRequest, opts ...grpc.CallOption) (*DeductStockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeductStockResponse)
+	err := c.cc.Invoke(ctx, ProductService_DeductStock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *productServiceClient) RestoreStock(ctx context.Context, in *RestoreStockRequest, opts ...grpc.CallOption) (*RestoreStockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RestoreStockResponse)
+	err := c.cc.Invoke(ctx, ProductService_RestoreStock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ProductServiceServer is the server API for ProductService service.
 // All implementations must embed UnimplementedProductServiceServer
 // for forward compatibility.
@@ -108,6 +135,11 @@ type ProductServiceServer interface {
 	UpdateProduct(context.Context, *UpdateProductRequest) (*UpdateProductResponse, error)
 	DeleteProduct(context.Context, *DeleteProductRequest) (*DeleteProductResponse, error)
 	ListProducts(context.Context, *ListProductsRequest) (*ListProductsResponse, error)
+	// 阶段 3：库存扣减/回补，供 order-service 下单编排调用。
+	// 这两个方法是系统内部调用——只要求 metadata 带身份（审计用），不做归属校验，
+	// 和 Update/Delete 的"只能操作自己的商品"是两种语义（身份用于追责，归属用于授权）。
+	DeductStock(context.Context, *DeductStockRequest) (*DeductStockResponse, error)
+	RestoreStock(context.Context, *RestoreStockRequest) (*RestoreStockResponse, error)
 	mustEmbedUnimplementedProductServiceServer()
 }
 
@@ -132,6 +164,12 @@ func (UnimplementedProductServiceServer) DeleteProduct(context.Context, *DeleteP
 }
 func (UnimplementedProductServiceServer) ListProducts(context.Context, *ListProductsRequest) (*ListProductsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListProducts not implemented")
+}
+func (UnimplementedProductServiceServer) DeductStock(context.Context, *DeductStockRequest) (*DeductStockResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeductStock not implemented")
+}
+func (UnimplementedProductServiceServer) RestoreStock(context.Context, *RestoreStockRequest) (*RestoreStockResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RestoreStock not implemented")
 }
 func (UnimplementedProductServiceServer) mustEmbedUnimplementedProductServiceServer() {}
 func (UnimplementedProductServiceServer) testEmbeddedByValue()                        {}
@@ -244,6 +282,42 @@ func _ProductService_ListProducts_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ProductService_DeductStock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeductStockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProductServiceServer).DeductStock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProductService_DeductStock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProductServiceServer).DeductStock(ctx, req.(*DeductStockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ProductService_RestoreStock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RestoreStockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ProductServiceServer).RestoreStock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ProductService_RestoreStock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ProductServiceServer).RestoreStock(ctx, req.(*RestoreStockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ProductService_ServiceDesc is the grpc.ServiceDesc for ProductService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -270,6 +344,14 @@ var ProductService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListProducts",
 			Handler:    _ProductService_ListProducts_Handler,
+		},
+		{
+			MethodName: "DeductStock",
+			Handler:    _ProductService_DeductStock_Handler,
+		},
+		{
+			MethodName: "RestoreStock",
+			Handler:    _ProductService_RestoreStock_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

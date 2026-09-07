@@ -81,6 +81,29 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # 阶段 3：订单服务。与 user/product 同一套对称结构：
+  # mysql-env 复用、telemetry 指向 compose 内的 Jaeger、依赖 MySQL 健康后启动。
+  # 注意它不依赖 Redis——订单没有读缓存层（写多、按人隔离，缓存收益低）。
+  order-service:
+    build:
+      context: .
+      args:
+        SERVICE: order-service
+    image: go-ecom-admin/order-service
+    environment:
+      <<: *mysql-env
+      # order-service 是 gRPC 客户端（调 product-service 扣库存），
+      # 容器网络内用 service 名寻址。
+      GRPC_CLIENT_PRODUCT_SERVICE_ADDR: product-service:9002
+      TELEMETRY_OTLP_ENDPOINT: jaeger:4317
+      TZ: Asia/Shanghai
+    depends_on:
+      mysql:
+        condition: service_healthy
+      product-service:
+        condition: service_started
+    restart: unless-stopped
+
   api-gateway:
     build:
       context: .
@@ -91,6 +114,7 @@ services:
       # 容器网络内用 service 名寻址，替代 yaml 里的 127.0.0.1
       GRPC_CLIENT_USER_SERVICE_ADDR: user-service:9001
       GRPC_CLIENT_PRODUCT_SERVICE_ADDR: product-service:9002
+      GRPC_CLIENT_ORDER_SERVICE_ADDR: order-service:9003
       JWT_SECRET: ${JWT_SECRET:-dev-only-change-me-in-production}
       TELEMETRY_OTLP_ENDPOINT: jaeger:4317
       TZ: Asia/Shanghai
@@ -99,6 +123,7 @@ services:
     depends_on:
       - user-service
       - product-service
+      - order-service
     restart: unless-stopped
 
   # 种子工具：不随 make up 启动（profiles 隔离），用 make seed 手动执行

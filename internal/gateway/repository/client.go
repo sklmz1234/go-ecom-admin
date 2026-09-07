@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	orderpb "go-ecom-admin/proto/order"
 	productpb "go-ecom-admin/proto/product"
 	userpb "go-ecom-admin/proto/user"
 )
@@ -154,4 +155,55 @@ func (c *ProductClient) ListProducts(ctx context.Context, page, pageSize int32) 
 		return nil, 0, err
 	}
 	return resp.GetProducts(), resp.GetTotal(), nil
+}
+
+// OrderClient 封装对 order-service 的 gRPC 调用（阶段 3）。
+type OrderClient struct {
+	client orderpb.OrderServiceClient
+}
+
+func NewOrderClient(target string) (*OrderClient, error) {
+	conn, err := grpc.NewClient(target,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelStatsHandler),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &OrderClient{client: orderpb.NewOrderServiceClient(conn)}, nil
+}
+
+// CreateOrder 的 ctx 必须已由 service 层注入调用方身份（pkg/identity）——
+// order-service 的零信任校验要求所有方法都带 user_id。
+func (c *OrderClient) CreateOrder(ctx context.Context, items []*orderpb.CreateOrderItem) (*orderpb.Order, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
+	defer cancel()
+
+	resp, err := c.client.CreateOrder(ctx, &orderpb.CreateOrderRequest{Items: items})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetOrder(), nil
+}
+
+func (c *OrderClient) GetOrder(ctx context.Context, id uint64) (*orderpb.Order, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
+	defer cancel()
+
+	resp, err := c.client.GetOrder(ctx, &orderpb.GetOrderRequest{Id: id})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetOrder(), nil
+}
+
+func (c *OrderClient) ListMyOrders(ctx context.Context, page, pageSize int32) ([]*orderpb.Order, int64, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
+	defer cancel()
+
+	resp, err := c.client.ListMyOrders(ctx, &orderpb.ListMyOrdersRequest{Page: page, PageSize: pageSize})
+	if err != nil {
+		return nil, 0, err
+	}
+	return resp.GetOrders(), resp.GetTotal(), nil
 }

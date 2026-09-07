@@ -170,6 +170,71 @@ func (h *Handler) DeleteProduct(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// —— 订单（阶段 3）：全部要求登录，userID 取自 JWT 中间件 ——
+
+func (h *Handler) CreateOrder(c *gin.Context) {
+	var req model.CreateOrderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	userID, ok := middleware.UserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing caller identity"})
+		return
+	}
+
+	order, err := h.svc.CreateOrder(c.Request.Context(), userID, req)
+	if err != nil {
+		h.respondGRPCError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, order)
+}
+
+func (h *Handler) GetOrder(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	userID, ok := middleware.UserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing caller identity"})
+		return
+	}
+
+	order, err := h.svc.GetOrder(c.Request.Context(), userID, id)
+	if err != nil {
+		h.respondGRPCError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, order)
+}
+
+func (h *Handler) ListMyOrders(c *gin.Context) {
+	var req model.ListOrdersRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	userID, ok := middleware.UserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing caller identity"})
+		return
+	}
+
+	resp, err := h.svc.ListMyOrders(c.Request.Context(), userID, req)
+	if err != nil {
+		h.respondGRPCError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
 // respondGRPCError 把下游 gRPC 服务返回的 status error 翻译成 HTTP 状态码。
 // 这是 pkg/errors.ToHTTPStatus 唯一的调用点——gateway 里所有 handler 共用同一套翻译规则。
 func (h *Handler) respondGRPCError(c *gin.Context, err error) {

@@ -82,6 +82,7 @@ type ServerConfig struct {
 	APIGateway     HTTPServerConfig `mapstructure:"api_gateway"`
 	UserService    GRPCServerConfig `mapstructure:"user_service"`
 	ProductService GRPCServerConfig `mapstructure:"product_service"`
+	OrderService   GRPCServerConfig `mapstructure:"order_service"`
 }
 
 type HTTPServerConfig struct {
@@ -98,6 +99,7 @@ type GRPCServerConfig struct {
 type GRPCClientConfig struct {
 	UserServiceAddr    string `mapstructure:"user_service_addr"`
 	ProductServiceAddr string `mapstructure:"product_service_addr"`
+	OrderServiceAddr   string `mapstructure:"order_service_addr"`
 }
 
 // TelemetryConfig 是链路追踪（阶段 2D）的开关与端点配置。三个服务共用一份
