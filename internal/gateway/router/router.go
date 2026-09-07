@@ -12,12 +12,12 @@ import (
 
 // 限流参数：每 IP 每秒补 10 个令牌，桶容量 20（允许 20 个请求的瞬时突发）。
 // 取值思路：正常浏览商品的频率远低于 10 QPS，这个额度对真实用户无感，
-// 但能挡住脚本对 /auth/login 这类重接口（bcrypt 校验约 100ms/次）的暴破。
+// 但能挡住脚本对 /auth/login 这类重接口（bcrypt 校验约 100ms/次）的爆破。
 // 学习项目先用常量；生产上应该进 config，配合多副本还要换 Redis 分布式限流
 // （理由见 ratelimit.go 里 ipRateLimiter 的注释）。
 const (
 	rateLimitPerSecond rate.Limit = 10
-	rateLimitBurst                 = 20
+	rateLimitBurst                = 20
 )
 
 // New 需要 jwtSecret 才能组装出鉴权中间件——路由表是唯一决定"哪些接口

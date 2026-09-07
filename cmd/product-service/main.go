@@ -52,9 +52,20 @@ func main() {
 	}
 	defer log.Sync()
 
+	// ctx 提前到数据库连接之前创建：启动期重试若撞上 SIGTERM，
+	// 重试循环要能立刻让位退出（理由见 cmd/user-service/main.go）。
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	// 和 user-service 一样：现在依赖真实数据（库存/价格都要能改），
-	// 连不上数据库直接 Fatal，不再走"scaffold mode"的优雅降级。
-	db, err := gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{TranslateError: true}) // TranslateError: 驱动方言错误(如 MySQL 1062)→gorm.ErrDuplicatedKey 等统一错误
+	// 连不上数据库最终会 Fatal。但"基础设施暂时未就绪"（daemon 重启后
+	// MySQL 还在初始化）和"配置错误"要区分开：前者带退避重试 2 分钟
+	// 秒级自愈，超时才 Fatal 交给 restart 策略兜底，机制详见
+	// pkg/database/connect.go 的注释。
+	// TranslateError: 驱动方言错误(如 MySQL 1062)→gorm.ErrDuplicatedKey 等统一错误
+	db, err := database.ConnectWithRetry(ctx, func() (*gorm.DB, error) {
+		return gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{TranslateError: true})
+	}, database.ConnectConfig{Log: log})
 	if err != nil {
 		log.Fatal("failed to connect to MySQL", zap.Error(err))
 	}
@@ -98,9 +109,6 @@ func main() {
 	if err != nil {
 		log.Fatal("failed to listen", zap.String("addr", addr), zap.Error(err))
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	go func() {
 		<-ctx.Done()

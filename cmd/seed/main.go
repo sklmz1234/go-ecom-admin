@@ -13,6 +13,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -23,6 +24,7 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 
+	"go-ecom-admin/pkg/cache"
 	"go-ecom-admin/pkg/config"
 	"go-ecom-admin/pkg/database"
 
@@ -54,7 +56,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	db, err := gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{TranslateError: true}) // TranslateError: 驱动方言错误(如 MySQL 1062)→gorm.ErrDuplicatedKey 等统一错误
+	// 带退避重试的连接（理由同业务服务）：seed 是手动跑的工具，经常在
+	// MySQL 还在启动/重启的窗口期被执行，秒退只会逼人手动重跑。
+	// TranslateError: 驱动方言错误(如 MySQL 1062)→gorm.ErrDuplicatedKey 等统一错误
+	db, err := database.ConnectWithRetry(context.Background(), func() (*gorm.DB, error) {
+		return gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{TranslateError: true})
+	}, database.ConnectConfig{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "connect mysql: %v\n", err)
 		os.Exit(1)
@@ -77,6 +84,23 @@ func main() {
 	if err := db.Exec("TRUNCATE TABLE products").Error; err != nil {
 		fmt.Fprintf(os.Stderr, "truncate products: %v\n", err)
 		os.Exit(1)
+	}
+
+	// TRUNCATE 只清了 MySQL，Redis 里还可能缓存着旧商品 JSON（2C 的读缓存，
+	// TTL 30 分钟）。不清掉的话，product-service 会从缓存读出没有 owner_id 的
+	// 旧数据，归属校验把所有写请求误判成 403——"确定的初始状态"必须包含缓存。
+	// 用 FlushDB 而不是按前缀删：seed 是开发工具，这个 Redis 实例专属于本项目；
+	// 如果将来共享实例，这里要换成 SCAN product:* 逐批删。
+	rdb, err := cache.New(cache.Config{Addr: cfg.Redis.Addr, Password: cfg.Redis.Password, DB: cfg.Redis.DB})
+	if err != nil {
+		// 清缓存是卫生措施不是核心职责，Redis 连不上只警告不中断
+		// （比如本地裸跑 seed 而 Redis 没起时，库表重置仍然有用）。
+		fmt.Fprintf(os.Stderr, "warn: connect redis, cache not flushed: %v\n", err)
+	} else {
+		if err := rdb.FlushDB(context.Background()).Err(); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: flush redis: %v\n", err)
+		}
+		_ = rdb.Close()
 	}
 
 	// 10 个种子用户密码都一样，哈希只需要算一次——bcrypt 本身带随机 salt，

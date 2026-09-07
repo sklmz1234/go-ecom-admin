@@ -50,14 +50,27 @@ func main() {
 	}
 	defer log.Sync()
 
+	// ctx 提前到数据库连接之前创建：启动期重试若撞上 SIGTERM
+	// （K8s 滚动更新 / docker stop），重试循环要能立刻让位退出，
+	// 而不是拖满宽限期才被强杀。
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	// 注册、登录和密码校验都依赖持久化用户数据，因此服务启动时必须先确认
 	// 数据库连接和表结构准备完成。初始化失败时立即结束进程，避免服务在无法
 	// 正常处理请求的状态下继续监听，直到请求到来后才暴露数据库不可用的问题。
+	//
+	// 连接失败不直接 Fatal：Docker daemon 重启后各容器被并行拉起，
+	// MySQL 可能还没就绪（depends_on 只在 compose up 编排时生效）。
+	// 这里带退避重试 2 分钟（1s 起指数增长封顶 10s），期间秒级自愈；
+	// 超时仍失败才 Fatal，交给 restart 策略 / K8s 兜底重启。
 	// TranslateError: true 让 GORM 把驱动的方言错误（例如 MySQL 的 1062
 	// 唯一键冲突）翻译成统一的 gorm.ErrDuplicatedKey——不开这个开关，
 	// repository.Create 里的 errors.Is(err, gorm.ErrDuplicatedKey) 永远
 	// 不会命中，重复用户名会被错误地当成 Internal(500) 而不是 409。
-	db, err := gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{TranslateError: true})
+	db, err := database.ConnectWithRetry(ctx, func() (*gorm.DB, error) {
+		return gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{TranslateError: true})
+	}, database.ConnectConfig{Log: log})
 	if err != nil {
 		log.Fatal("failed to connect to MySQL", zap.Error(err))
 	}
@@ -89,9 +102,6 @@ func main() {
 	if err != nil {
 		log.Fatal("failed to listen", zap.String("addr", addr), zap.Error(err))
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	go func() {
 		<-ctx.Done()
