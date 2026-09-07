@@ -13,9 +13,11 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"go-ecom-admin/pkg/config"
 	"go-ecom-admin/pkg/logger"
+	"go-ecom-admin/pkg/telemetry"
 
 	"go-ecom-admin/internal/gateway/handler"
 	"go-ecom-admin/internal/gateway/repository"
@@ -44,6 +46,27 @@ func main() {
 	}
 	defer log.Sync()
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// 链路追踪（阶段 2D）：网关是整条链路的入口 span 产生地。初始化失败
+	// 选择 Fatal——追踪地址配错属于部署错误，带着错误配置"静默降级"会让
+	// 人误以为追踪正常，排障时才发现 Jaeger 上一条数据都没有。
+	var tracerProvider *sdktrace.TracerProvider
+	if cfg.Telemetry.Enabled {
+		tracerProvider, err = telemetry.Setup(ctx, telemetry.Config{
+			ServiceName:  "api-gateway",
+			OTLPEndpoint: cfg.Telemetry.OTLPEndpoint,
+			SampleRatio:  cfg.Telemetry.SampleRatio,
+		})
+		if err != nil {
+			log.Fatal("init telemetry", zap.Error(err))
+		}
+		log.Info("telemetry enabled",
+			zap.String("otlp_endpoint", cfg.Telemetry.OTLPEndpoint),
+			zap.Float64("sample_ratio", cfg.Telemetry.SampleRatio))
+	}
+
 	// grpc.NewClient 是非阻塞的：即使 user-service / product-service 还没启动，
 	// 这里也不会报错，真正的连接尝试发生在第一次 RPC 调用时。
 	userClient, err := repository.NewUserClient(cfg.GRPCClient.UserServiceAddr)
@@ -57,16 +80,13 @@ func main() {
 
 	svc := service.New(userClient, productClient)
 	h := handler.New(svc, log)
-	engine := router.New(h, cfg.JWT.Secret)
+	engine := router.New(h, cfg.JWT.Secret, log)
 
 	addr := fmt.Sprintf(":%d", cfg.Server.APIGateway.HTTPPort)
 	httpServer := &http.Server{
 		Addr:    addr,
 		Handler: engine,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	go func() {
 		<-ctx.Done()
@@ -75,6 +95,13 @@ func main() {
 		defer cancel()
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
 			log.Error("graceful shutdown failed", zap.Error(err))
+		}
+		// HTTP 停完再 flush trace：把批处理器里还没发出去的 span 冲给
+		// Jaeger——不做这步，进程最后几秒的请求在链路系统里"凭空消失"。
+		if tracerProvider != nil {
+			if err := tracerProvider.Shutdown(shutdownCtx); err != nil {
+				log.Error("trace provider shutdown", zap.Error(err))
+			}
 		}
 	}()
 

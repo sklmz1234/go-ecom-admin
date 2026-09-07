@@ -12,16 +12,20 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	gormotel "gorm.io/plugin/opentelemetry/tracing"
 
 	"go-ecom-admin/pkg/config"
 	"go-ecom-admin/pkg/database"
 	"go-ecom-admin/pkg/logger"
+	"go-ecom-admin/pkg/telemetry"
 
 	"go-ecom-admin/internal/user/model"
 	"go-ecom-admin/internal/user/repository"
@@ -50,16 +54,52 @@ func main() {
 	}
 	defer log.Sync()
 
+	// ctx 提前到数据库连接之前创建：启动期重试若撞上 SIGTERM
+	// （K8s 滚动更新 / docker stop），重试循环要能立刻让位退出，
+	// 而不是拖满宽限期才被强杀。
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// 链路追踪（阶段 2D）：作为被调方，负责从 gRPC metadata 里提取上游
+	// 传播来的 trace 上下文并延续 span——网关和本服务因此能连成一条链。
+	var tracerProvider *sdktrace.TracerProvider
+	if cfg.Telemetry.Enabled {
+		tracerProvider, err = telemetry.Setup(ctx, telemetry.Config{
+			ServiceName:  "user-service",
+			OTLPEndpoint: cfg.Telemetry.OTLPEndpoint,
+			SampleRatio:  cfg.Telemetry.SampleRatio,
+		})
+		if err != nil {
+			log.Fatal("init telemetry", zap.Error(err))
+		}
+	}
+
 	// 注册、登录和密码校验都依赖持久化用户数据，因此服务启动时必须先确认
 	// 数据库连接和表结构准备完成。初始化失败时立即结束进程，避免服务在无法
 	// 正常处理请求的状态下继续监听，直到请求到来后才暴露数据库不可用的问题。
+	//
+	// 连接失败不直接 Fatal：Docker daemon 重启后各容器被并行拉起，
+	// MySQL 可能还没就绪（depends_on 只在 compose up 编排时生效）。
+	// 这里带退避重试 2 分钟（1s 起指数增长封顶 10s），期间秒级自愈；
+	// 超时仍失败才 Fatal，交给 restart 策略 / K8s 兜底重启。
 	// TranslateError: true 让 GORM 把驱动的方言错误（例如 MySQL 的 1062
 	// 唯一键冲突）翻译成统一的 gorm.ErrDuplicatedKey——不开这个开关，
 	// repository.Create 里的 errors.Is(err, gorm.ErrDuplicatedKey) 永远
 	// 不会命中，重复用户名会被错误地当成 Internal(500) 而不是 409。
-	db, err := gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{TranslateError: true})
+	db, err := database.ConnectWithRetry(ctx, func() (*gorm.DB, error) {
+		return gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{TranslateError: true})
+	}, database.ConnectConfig{Log: log})
 	if err != nil {
 		log.Fatal("failed to connect to MySQL", zap.Error(err))
+	}
+	// SQL span 埋点（阶段 2D）：GORM 插件在每次查询前后建 span。前提是
+	// 查询带 ctx（repository 里已全部 WithContext）——span 从 gRPC handler
+	// 的 ctx 一路传到 SQL，这就是"trace 贯穿到存储层"的最后一环。
+	// WithoutQueryVariables：不把查询参数（含密码哈希）记进 span 属性，
+	// 观测数据会进 Jaeger 这类几乎无访问控制的系统，敏感值不能落进去。
+	// WithoutMetrics：指标部分留给 2D 后半程接 Prometheus 时再开。
+	if err := db.Use(gormotel.NewPlugin(gormotel.WithoutQueryVariables(), gormotel.WithoutMetrics())); err != nil {
+		log.Fatal("attach gorm otel plugin", zap.Error(err))
 	}
 	// 带锁迁移：K8s 下 Deployment 是 2 副本，两个 Pod 同时启动时
 	// 裸 AutoMigrate 会抢建表（Error 1050 → CrashLoop）。GET_LOCK 命名锁
@@ -71,7 +111,10 @@ func main() {
 
 	svc := service.New(repo, log, cfg.JWT.Secret, cfg.JWT.ExpireHours)
 
-	grpcServer := grpc.NewServer()
+	// StatsHandler 承担服务端埋点：提取 metadata 里的 traceparent 延续
+	// 上游链路 + 为每轮 RPC 建服务端 span。telemetry 未启用时全局 provider
+	// 是 noop，无开销。
+	grpcServer := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	userpb.RegisterUserServiceServer(grpcServer, svc)
 	reflection.Register(grpcServer) // 方便本地用 grpcurl 调试，生产环境按需关闭
 
@@ -90,13 +133,18 @@ func main() {
 		log.Fatal("failed to listen", zap.String("addr", addr), zap.Error(err))
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	go func() {
 		<-ctx.Done()
 		log.Info("shutting down user-service")
 		grpcServer.GracefulStop()
+		// 停服后 flush 未导出的 span，理由见 api-gateway main.go。
+		if tracerProvider != nil {
+			flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := tracerProvider.Shutdown(flushCtx); err != nil {
+				log.Error("trace provider shutdown", zap.Error(err))
+			}
+		}
 	}()
 
 	log.Info("user-service listening", zap.String("addr", addr))

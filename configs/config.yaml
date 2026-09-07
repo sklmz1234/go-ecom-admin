@@ -43,3 +43,13 @@ server:
 grpc_client:
   user_service_addr: 127.0.0.1:9001
   product_service_addr: 127.0.0.1:9002
+
+# 链路追踪（阶段 2D）。默认开着：本地最常用的形态是 docker compose 全栈
+# （Jaeger 起在 compose 网络里），宿主机裸 go run 时端口是通的（4317 已映射）。
+# 完全不想起 Jaeger 就 TELEMETRY_ENABLED=false，SDK 不初始化、零开销。
+# sample_ratio 本地 1.0 全采；生产参考值 0.1——全采的成本（存储/网络/噪声）
+# 在生产流量下不可接受，且 ParentBased 采样保证被采到的请求整条链路完整。
+telemetry:
+  enabled: true
+  otlp_endpoint: 127.0.0.1:4317
+  sample_ratio: 1.0

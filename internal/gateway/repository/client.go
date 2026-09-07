@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -25,12 +26,23 @@ type UserClient struct {
 	client userpb.UserServiceClient
 }
 
+// otelStatsHandler 是两个 gRPC 客户端共用的 stats handler：每次 RPC 把
+// 当前 trace 上下文（traceparent）注入 gRPC metadata，并在客户端侧记一条
+// 出站 span——没有它，网关的 span 和下游服务的 span 就断在进程边界上，
+// Jaeger 里出现的是两条独立链路而不是一条瀑布。
+// 用 stats.Handler 而不是旧的 UnaryClientInterceptor：interceptor 方案拿
+// 不到连接级事件，且官方已标记 deprecated。
+var otelStatsHandler = otelgrpc.NewClientHandler()
+
 // NewUserClient 用 target（形如 "127.0.0.1:9001"）拨号 user-service。
 // grpc.NewClient 是非阻塞的——它只做地址解析和惰性连接管理，不会在这里
 // 真的发起网络连接，所以即使 user-service 还没启动，api-gateway 也能正常起来
 // （请求到来时才会真正建连，失败了也只是那一次调用报错）。
 func NewUserClient(target string) (*UserClient, error) {
-	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(target,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelStatsHandler),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +90,10 @@ type ProductClient struct {
 }
 
 func NewProductClient(target string) (*ProductClient, error) {
-	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(target,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStatsHandler(otelStatsHandler),
+	)
 	if err != nil {
 		return nil, err
 	}

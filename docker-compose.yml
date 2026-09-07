@@ -24,6 +24,13 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-ecom123}
       TZ: Asia/Shanghai
     # 和 Go 服务容器的 TZ 保持一致，时间戳才不会差 8 小时
+    # 和 Go 服务一致的自愈策略：Docker daemon 重启后所有容器被并行拉起，
+    # 基础设施容器不写 restart 就会永远躺着（2026-09-07 实测：Docker Desktop
+    # 重启后 MySQL/Redis 没人拉，两个业务服务连不上库陷入崩溃循环，
+    # 前端 internal error）。注意：depends_on 的健康检查门槛只在
+    # `docker compose up` 编排时生效，daemon 重启后的自动拉起不走依赖顺序，
+    # 所以应用层还有 pkg/database.ConnectWithRetry 做第二道防线。
+    restart: unless-stopped
     command: --default-time-zone=+08:00
     volumes:
       - mysql-data:/var/lib/mysql
@@ -48,6 +55,7 @@ services:
     environment:
       <<: *mysql-env
       JWT_SECRET: ${JWT_SECRET:-dev-only-change-me-in-production}
+      TELEMETRY_OTLP_ENDPOINT: jaeger:4317
       TZ: Asia/Shanghai
     depends_on:
       mysql:
@@ -64,6 +72,7 @@ services:
       <<: *mysql-env
       # 缓存地址，覆盖 config.yaml 里的 127.0.0.1:6379
       REDIS_ADDR: redis:6379
+      TELEMETRY_OTLP_ENDPOINT: jaeger:4317
       TZ: Asia/Shanghai
     depends_on:
       mysql:
@@ -83,6 +92,7 @@ services:
       GRPC_CLIENT_USER_SERVICE_ADDR: user-service:9001
       GRPC_CLIENT_PRODUCT_SERVICE_ADDR: product-service:9002
       JWT_SECRET: ${JWT_SECRET:-dev-only-change-me-in-production}
+      TELEMETRY_OTLP_ENDPOINT: jaeger:4317
       TZ: Asia/Shanghai
     ports:
       - "${GATEWAY_HOST_PORT:-8080}:8080"
@@ -101,9 +111,14 @@ services:
     profiles: ["tools"]
     environment:
       <<: *mysql-env
+      # seed 重置库表后要清商品读缓存（否则旧缓存里的数据没有 owner_id，
+      # 归属校验会误判 403），所以需要 Redis 地址。
+      REDIS_ADDR: redis:6379
       TZ: Asia/Shanghai
     depends_on:
       mysql:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   # product-service 读缓存（阶段 2C）。不暴露宿主机端口——只有容器网络内的
@@ -113,6 +128,8 @@ services:
     environment:
       TZ: Asia/Shanghai
     command: redis-server --appendonly yes
+    # 同 mysql：daemon 重启后自愈，理由见上方 mysql 服务的注释。
+    restart: unless-stopped
     volumes:
       - redis-data:/data
     healthcheck:
@@ -120,6 +137,23 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # 链路追踪后端（阶段 2D）。all-in-one 单容器包含 collector + 存储（内存）
+  # + UI，是本地开发的标配形态；生产要拆 all-in-one（Jaeger v2 起官方也建议
+  # 生产用 jaeger collector + ES/Cassandra 后端独立部署），内存存储重启即丢
+  # ——本地这无所谓，反而省得清数据。
+  # 4317 (OTLP gRPC) 同时映射到宿主机：服务在容器网络内走 jaeger:4317，
+  # 宿主机裸 go run 的进程走 127.0.0.1:4317（config.yaml 默认值）。
+  # UI 在 http://localhost:16686。
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      TZ: Asia/Shanghai
+    ports:
+      - "${JAEGER_UI_HOST_PORT:-16686}:16686"
+      - "4317:4317"
+    restart: unless-stopped
 
 volumes:
   mysql-data:

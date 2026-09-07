@@ -13,17 +13,21 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	gormotel "gorm.io/plugin/opentelemetry/tracing"
 
 	"go-ecom-admin/pkg/cache"
 	"go-ecom-admin/pkg/config"
 	"go-ecom-admin/pkg/database"
 	"go-ecom-admin/pkg/logger"
+	"go-ecom-admin/pkg/telemetry"
 
 	"go-ecom-admin/internal/product/model"
 	"go-ecom-admin/internal/product/repository"
@@ -52,11 +56,39 @@ func main() {
 	}
 	defer log.Sync()
 
+	// ctx 提前到数据库连接之前创建：启动期重试若撞上 SIGTERM，
+	// 重试循环要能立刻让位退出（理由见 cmd/user-service/main.go）。
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// 链路追踪（阶段 2D）：理由见 cmd/user-service/main.go。
+	var tracerProvider *sdktrace.TracerProvider
+	if cfg.Telemetry.Enabled {
+		tracerProvider, err = telemetry.Setup(ctx, telemetry.Config{
+			ServiceName:  "product-service",
+			OTLPEndpoint: cfg.Telemetry.OTLPEndpoint,
+			SampleRatio:  cfg.Telemetry.SampleRatio,
+		})
+		if err != nil {
+			log.Fatal("init telemetry", zap.Error(err))
+		}
+	}
+
 	// 和 user-service 一样：现在依赖真实数据（库存/价格都要能改），
-	// 连不上数据库直接 Fatal，不再走"scaffold mode"的优雅降级。
-	db, err := gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{TranslateError: true}) // TranslateError: 驱动方言错误(如 MySQL 1062)→gorm.ErrDuplicatedKey 等统一错误
+	// 连不上数据库最终会 Fatal。但"基础设施暂时未就绪"（daemon 重启后
+	// MySQL 还在初始化）和"配置错误"要区分开：前者带退避重试 2 分钟
+	// 秒级自愈，超时才 Fatal 交给 restart 策略兜底，机制详见
+	// pkg/database/connect.go 的注释。
+	// TranslateError: 驱动方言错误(如 MySQL 1062)→gorm.ErrDuplicatedKey 等统一错误
+	db, err := database.ConnectWithRetry(ctx, func() (*gorm.DB, error) {
+		return gorm.Open(mysql.Open(cfg.MySQL.DSN()), &gorm.Config{TranslateError: true})
+	}, database.ConnectConfig{Log: log})
 	if err != nil {
 		log.Fatal("failed to connect to MySQL", zap.Error(err))
+	}
+	// SQL span 埋点，理由见 cmd/user-service/main.go。
+	if err := db.Use(gormotel.NewPlugin(gormotel.WithoutQueryVariables(), gormotel.WithoutMetrics())); err != nil {
+		log.Fatal("attach gorm otel plugin", zap.Error(err))
 	}
 	// 带锁迁移，理由见 cmd/user-service/main.go：多副本并发建表竞态。
 	if err := database.Migrate(db, 30*time.Second, &model.Product{}); err != nil {
@@ -83,7 +115,8 @@ func main() {
 
 	svc := service.New(repo, log)
 
-	grpcServer := grpc.NewServer()
+	// 服务端埋点：提取上游 trace 上下文 + 每轮 RPC 建服务端 span。
+	grpcServer := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))
 	productpb.RegisterProductServiceServer(grpcServer, svc)
 	reflection.Register(grpcServer)
 
@@ -99,13 +132,18 @@ func main() {
 		log.Fatal("failed to listen", zap.String("addr", addr), zap.Error(err))
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
 	go func() {
 		<-ctx.Done()
 		log.Info("shutting down product-service")
 		grpcServer.GracefulStop()
+		// 停服后 flush 未导出的 span，理由见 api-gateway main.go。
+		if tracerProvider != nil {
+			flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := tracerProvider.Shutdown(flushCtx); err != nil {
+				log.Error("trace provider shutdown", zap.Error(err))
+			}
+		}
 	}()
 
 	log.Info("product-service listening", zap.String("addr", addr))
