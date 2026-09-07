@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	apperrors "go-ecom-admin/pkg/errors"
+	"go-ecom-admin/pkg/identity"
 
 	"go-ecom-admin/internal/product/model"
 	"go-ecom-admin/internal/product/repository/mocks"
@@ -38,7 +39,7 @@ func newTestService(t *testing.T) (*Service, *mocks.MockRepository) {
 // ctxWithUserID 模拟 api-gateway 验完 JWT 后注入的 incoming metadata——
 // 单测里不经过真实的 gRPC 传输，直接手工构造同样的 context 形态。
 func ctxWithUserID(uid uint64) context.Context {
-	md := metadata.Pairs(metadataKeyUserID, strconv.FormatUint(uid, 10))
+	md := metadata.Pairs(identity.MetadataKeyUserID, strconv.FormatUint(uid, 10))
 	return metadata.NewIncomingContext(context.Background(), md)
 }
 
@@ -242,4 +243,73 @@ func TestListProducts(t *testing.T) {
 	assert.Equal(t, int64(25), resp.GetTotal())
 	assert.Equal(t, "显示器", resp.GetProducts()[1].GetName())
 	assert.Equal(t, uint64(7), resp.GetProducts()[1].GetOwnerId())
+}
+
+// TestDeductStock_Unauthenticated 验证零信任底线同样适用于库存写路径：
+// metadata 里没有 user_id 直接 Unauthenticated，repo 零期望证明未触达存储。
+func TestDeductStock_Unauthenticated(t *testing.T) {
+	svc, _ := newTestService(t)
+
+	_, err := svc.DeductStock(context.Background(), &productpb.DeductStockRequest{ProductId: 1, Quantity: 1})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.Unauthenticated, status.Code(err))
+}
+
+// TestDeductStock_NoOwnershipCheck 是决策 3 的核心用例：DeductStock 只验身份
+// 不验归属——下单用户（uid=7）可以扣别人（owner=42）的商品库存，
+// mock 的 GetByID 归属校验路径（checkOwnership）完全不会被走到。
+func TestDeductStock_NoOwnershipCheck(t *testing.T) {
+	svc, repo := newTestService(t)
+	repo.EXPECT().DeductStock(mock.Anything, uint64(1), int32(2)).
+		Return(&model.Product{ID: 1, Name: "机械键盘", PriceCents: 19900, Stock: 8, OwnerID: 42}, nil)
+
+	resp, err := svc.DeductStock(ctxWithUserID(7), &productpb.DeductStockRequest{ProductId: 1, Quantity: 2})
+
+	require.NoError(t, err)
+	assert.Equal(t, int32(8), resp.GetRemainingStock())
+	assert.Equal(t, int64(19900), resp.GetPriceCents(), "响应必须带价格快照")
+	assert.Equal(t, "机械键盘", resp.GetName())
+}
+
+// 库存不足：repo 的 FailedPrecondition 原样翻译成 gRPC FailedPrecondition。
+func TestDeductStock_InsufficientStock(t *testing.T) {
+	svc, repo := newTestService(t)
+	repo.EXPECT().DeductStock(mock.Anything, uint64(1), int32(99)).
+		Return(nil, apperrors.FailedPrecondition("insufficient stock", nil))
+
+	_, err := svc.DeductStock(ctxWithUserID(7), &productpb.DeductStockRequest{ProductId: 1, Quantity: 99})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+}
+
+func TestDeductStock_Validation(t *testing.T) {
+	svc, _ := newTestService(t)
+
+	_, err := svc.DeductStock(ctxWithUserID(7), &productpb.DeductStockRequest{ProductId: 0, Quantity: 1})
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+
+	_, err = svc.DeductStock(ctxWithUserID(7), &productpb.DeductStockRequest{ProductId: 1, Quantity: 0})
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+}
+
+func TestRestoreStock_Success(t *testing.T) {
+	svc, repo := newTestService(t)
+	repo.EXPECT().RestoreStock(mock.Anything, uint64(1), int32(2)).
+		Return(&model.Product{ID: 1, Name: "机械键盘", Stock: 10, OwnerID: 42}, nil)
+
+	resp, err := svc.RestoreStock(ctxWithUserID(7), &productpb.RestoreStockRequest{ProductId: 1, Quantity: 2})
+
+	require.NoError(t, err)
+	assert.Equal(t, int32(10), resp.GetRemainingStock())
+}
+
+func TestRestoreStock_Unauthenticated(t *testing.T) {
+	svc, _ := newTestService(t)
+
+	_, err := svc.RestoreStock(context.Background(), &productpb.RestoreStockRequest{ProductId: 1, Quantity: 1})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.Unauthenticated, status.Code(err))
 }

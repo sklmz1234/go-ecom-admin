@@ -24,3 +24,19 @@ packages:
           filename: mock_repository.go
           dir: "{{.InterfaceDir}}/mocks"
           outpkg: mocks
+  go-ecom-admin/internal/order/repository:
+    config:
+      all: false
+    interfaces:
+      Repository:
+        config:
+          mockname: MockRepository
+          filename: mock_repository.go
+          dir: "{{.InterfaceDir}}/mocks"
+          outpkg: mocks
+      ProductClient:
+        config:
+          mockname: MockProductClient
+          filename: mock_product_client.go
+          dir: "{{.InterfaceDir}}/mocks"
+          outpkg: mocks

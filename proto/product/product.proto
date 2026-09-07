@@ -11,6 +11,11 @@ service ProductService {
   rpc UpdateProduct(UpdateProductRequest) returns (UpdateProductResponse);
   rpc DeleteProduct(DeleteProductRequest) returns (DeleteProductResponse);
   rpc ListProducts(ListProductsRequest) returns (ListProductsResponse);
+  // 阶段 3：库存扣减/回补，供 order-service 下单编排调用。
+  // 这两个方法是系统内部调用——只要求 metadata 带身份（审计用），不做归属校验，
+  // 和 Update/Delete 的"只能操作自己的商品"是两种语义（身份用于追责，归属用于授权）。
+  rpc DeductStock(DeductStockRequest) returns (DeductStockResponse);
+  rpc RestoreStock(RestoreStockRequest) returns (RestoreStockResponse);
 }
 
 message GetProductRequest {
@@ -60,6 +65,41 @@ message ListProductsRequest {
 message ListProductsResponse {
   repeated Product products = 1;
   int64 total = 2;
+}
+
+// DeductStock 防超卖的核心契约：服务端用一条条件更新 SQL 原子完成
+// （UPDATE products SET stock = stock - ? WHERE id = ? AND stock >= ?），
+// RowsAffected == 0 即库存不足，返回 FailedPrecondition——数据库是唯一真相源，
+// 不存在"先查后改"的 TOCTOU 窗口。
+message DeductStockRequest {
+  uint64 product_id = 1;
+  int32 quantity = 2;
+}
+
+// DeductStockResponse 除了扣减后的剩余库存，还带回扣减时刻的 price_cents / name
+// 快照：下单方（order-service）需要把"下单时的价格"写进 OrderItem.unit_price_cents
+// ——商品价格以后会改，订单金额不能跟着变。一次调用拿全，避免"先 GetProduct 再
+// DeductStock"的两次往返和更大的价格竞态窗口。
+// （严格说 UPDATE 扣减后再读价格仍有理论竞态：扣减成功与读取之间商品被改价，
+// 快照会是新价。学习项目量级无感；真要原子快照需要 SELECT ... FOR UPDATE
+// 或把价格写进库存行同事务读取，面试可展开这层权衡。）
+message DeductStockResponse {
+  int32 remaining_stock = 1;
+  int64 price_cents = 2;
+  string name = 3;
+}
+
+// RestoreStock 是 DeductStock 的补偿操作（Saga 回滚）：下单编排中后续步骤失败时
+// 由 order-service 调用，无条件加回库存。它是幂等不安全的（重复调用会重复加），
+// 调用方必须保证"一次成功的 Deduct 最多对应一次 Restore"——学习项目做到补偿为止，
+// 生产需要重试 + 对账兜底。
+message RestoreStockRequest {
+  uint64 product_id = 1;
+  int32 quantity = 2;
+}
+
+message RestoreStockResponse {
+  int32 remaining_stock = 1;
 }
 
 message Product {

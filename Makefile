@@ -15,8 +15,8 @@ up: ## 构建镜像并后台启动整套环境
 down: ## 停止并移除容器（数据卷保留，数据不丢）
 	$(COMPOSE) down
 
-restart: ## 重启三个 Go 服务（不动 MySQL 和数据）
-	$(COMPOSE) restart user-service product-service api-gateway
+restart: ## 重启四个 Go 服务（不动 MySQL 和数据）
+	$(COMPOSE) restart user-service product-service order-service api-gateway
 
 logs: ## 跟踪全部服务日志（Ctrl-C 退出，不影响运行中的服务）
 	$(COMPOSE) logs -f --tail=100

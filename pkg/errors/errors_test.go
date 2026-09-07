@@ -27,6 +27,7 @@ func TestToGRPCStatus(t *testing.T) {
 		{"InvalidArgument", apperrors.InvalidArgument("bad request", nil), codes.InvalidArgument, "bad request"},
 		{"AlreadyExists", apperrors.AlreadyExists("already exists", nil), codes.AlreadyExists, "already exists"},
 		{"Unauthorized", apperrors.Unauthorized("invalid username or password", nil), codes.Unauthenticated, "invalid username or password"},
+		{"FailedPrecondition", apperrors.FailedPrecondition("insufficient stock", nil), codes.FailedPrecondition, "insufficient stock"},
 
 		// Internal 走 default 分支：message 被替换成 "internal error"，
 		// 底层细节（"boom"）不透传给客户端——这是有意的防泄露设计。
@@ -70,6 +71,7 @@ func TestToHTTPStatus(t *testing.T) {
 		{"gRPCInvalidArgument映射400", status.Error(codes.InvalidArgument, "bad request"), http.StatusBadRequest, "bad request"},
 		{"gRPCAlreadyExists映射409", status.Error(codes.AlreadyExists, "conflict"), http.StatusConflict, "conflict"},
 		{"gRPCUnauthenticated映射401", status.Error(codes.Unauthenticated, "no token"), http.StatusUnauthorized, "no token"},
+		{"gRPCFailedPrecondition映射409", status.Error(codes.FailedPrecondition, "insufficient stock"), http.StatusConflict, "insufficient stock"},
 		{"非gRPC错误映射500", errors.New("boom"), http.StatusInternalServerError, "internal error"},
 	}
 

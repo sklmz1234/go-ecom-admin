@@ -69,6 +69,66 @@ func (_c *MockRepository_Create_Call) RunAndReturn(run func(context.Context, *mo
 	return _c
 }
 
+// DeductStock provides a mock function with given fields: ctx, productID, quantity
+func (_m *MockRepository) DeductStock(ctx context.Context, productID uint64, quantity int32) (*model.Product, error) {
+	ret := _m.Called(ctx, productID, quantity)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeductStock")
+	}
+
+	var r0 *model.Product
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, uint64, int32) (*model.Product, error)); ok {
+		return rf(ctx, productID, quantity)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, uint64, int32) *model.Product); ok {
+		r0 = rf(ctx, productID, quantity)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*model.Product)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, uint64, int32) error); ok {
+		r1 = rf(ctx, productID, quantity)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MockRepository_DeductStock_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeductStock'
+type MockRepository_DeductStock_Call struct {
+	*mock.Call
+}
+
+// DeductStock is a helper method to define mock.On call
+//   - ctx context.Context
+//   - productID uint64
+//   - quantity int32
+func (_e *MockRepository_Expecter) DeductStock(ctx interface{}, productID interface{}, quantity interface{}) *MockRepository_DeductStock_Call {
+	return &MockRepository_DeductStock_Call{Call: _e.mock.On("DeductStock", ctx, productID, quantity)}
+}
+
+func (_c *MockRepository_DeductStock_Call) Run(run func(ctx context.Context, productID uint64, quantity int32)) *MockRepository_DeductStock_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(uint64), args[2].(int32))
+	})
+	return _c
+}
+
+func (_c *MockRepository_DeductStock_Call) Return(_a0 *model.Product, _a1 error) *MockRepository_DeductStock_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MockRepository_DeductStock_Call) RunAndReturn(run func(context.Context, uint64, int32) (*model.Product, error)) *MockRepository_DeductStock_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Delete provides a mock function with given fields: ctx, id
 func (_m *MockRepository) Delete(ctx context.Context, id uint64) error {
 	ret := _m.Called(ctx, id)
@@ -238,6 +298,66 @@ func (_c *MockRepository_List_Call) Return(_a0 []*model.Product, _a1 int64, _a2 
 }
 
 func (_c *MockRepository_List_Call) RunAndReturn(run func(context.Context, int, int) ([]*model.Product, int64, error)) *MockRepository_List_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// RestoreStock provides a mock function with given fields: ctx, productID, quantity
+func (_m *MockRepository) RestoreStock(ctx context.Context, productID uint64, quantity int32) (*model.Product, error) {
+	ret := _m.Called(ctx, productID, quantity)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RestoreStock")
+	}
+
+	var r0 *model.Product
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, uint64, int32) (*model.Product, error)); ok {
+		return rf(ctx, productID, quantity)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, uint64, int32) *model.Product); ok {
+		r0 = rf(ctx, productID, quantity)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*model.Product)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, uint64, int32) error); ok {
+		r1 = rf(ctx, productID, quantity)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MockRepository_RestoreStock_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RestoreStock'
+type MockRepository_RestoreStock_Call struct {
+	*mock.Call
+}
+
+// RestoreStock is a helper method to define mock.On call
+//   - ctx context.Context
+//   - productID uint64
+//   - quantity int32
+func (_e *MockRepository_Expecter) RestoreStock(ctx interface{}, productID interface{}, quantity interface{}) *MockRepository_RestoreStock_Call {
+	return &MockRepository_RestoreStock_Call{Call: _e.mock.On("RestoreStock", ctx, productID, quantity)}
+}
+
+func (_c *MockRepository_RestoreStock_Call) Run(run func(ctx context.Context, productID uint64, quantity int32)) *MockRepository_RestoreStock_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(uint64), args[2].(int32))
+	})
+	return _c
+}
+
+func (_c *MockRepository_RestoreStock_Call) Return(_a0 *model.Product, _a1 error) *MockRepository_RestoreStock_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MockRepository_RestoreStock_Call) RunAndReturn(run func(context.Context, uint64, int32) (*model.Product, error)) *MockRepository_RestoreStock_Call {
 	_c.Call.Return(run)
 	return _c
 }

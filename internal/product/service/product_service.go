@@ -134,6 +134,73 @@ func (s *Service) DeleteProduct(ctx context.Context, req *productpb.DeleteProduc
 	return &productpb.DeleteProductResponse{}, nil
 }
 
+// DeductStock / RestoreStock（阶段 3）是系统内部调用：发起者是 order-service 的
+// 下单编排，不是商品 owner，所以**只验身份不验归属**——身份用于追责（审计日志
+// 记录是谁的下单触发了扣减），归属校验属于 Update/Delete 的授权语义，两码事。
+func (s *Service) DeductStock(ctx context.Context, req *productpb.DeductStockRequest) (*productpb.DeductStockResponse, error) {
+	callerID, err := userIDFromContext(ctx)
+	if err != nil {
+		return nil, apperrors.ToGRPCStatus(err)
+	}
+
+	if req.GetProductId() == 0 || req.GetQuantity() <= 0 {
+		return nil, apperrors.ToGRPCStatus(apperrors.InvalidArgument("product_id is required and quantity must be positive", nil))
+	}
+
+	p, err := s.repo.DeductStock(ctx, req.GetProductId(), req.GetQuantity())
+	if err != nil {
+		s.log.Warn("deduct stock failed",
+			zap.Uint64("product_id", req.GetProductId()),
+			zap.Int32("quantity", req.GetQuantity()),
+			zap.Uint64("caller_id", callerID),
+			zap.Error(err),
+		)
+		return nil, apperrors.ToGRPCStatus(err)
+	}
+
+	s.log.Info("stock deducted",
+		zap.Uint64("product_id", p.ID),
+		zap.Int32("quantity", req.GetQuantity()),
+		zap.Int32("remaining", p.Stock),
+		zap.Uint64("caller_id", callerID),
+	)
+	return &productpb.DeductStockResponse{
+		RemainingStock: p.Stock,
+		PriceCents:     p.PriceCents,
+		Name:           p.Name,
+	}, nil
+}
+
+func (s *Service) RestoreStock(ctx context.Context, req *productpb.RestoreStockRequest) (*productpb.RestoreStockResponse, error) {
+	callerID, err := userIDFromContext(ctx)
+	if err != nil {
+		return nil, apperrors.ToGRPCStatus(err)
+	}
+
+	if req.GetProductId() == 0 || req.GetQuantity() <= 0 {
+		return nil, apperrors.ToGRPCStatus(apperrors.InvalidArgument("product_id is required and quantity must be positive", nil))
+	}
+
+	p, err := s.repo.RestoreStock(ctx, req.GetProductId(), req.GetQuantity())
+	if err != nil {
+		s.log.Warn("restore stock failed",
+			zap.Uint64("product_id", req.GetProductId()),
+			zap.Int32("quantity", req.GetQuantity()),
+			zap.Uint64("caller_id", callerID),
+			zap.Error(err),
+		)
+		return nil, apperrors.ToGRPCStatus(err)
+	}
+
+	s.log.Info("stock restored",
+		zap.Uint64("product_id", p.ID),
+		zap.Int32("quantity", req.GetQuantity()),
+		zap.Int32("remaining", p.Stock),
+		zap.Uint64("caller_id", callerID),
+	)
+	return &productpb.RestoreStockResponse{RemainingStock: p.Stock}, nil
+}
+
 // checkOwnership 是 Update/Delete 共用的归属校验：商品不存在 -> NotFound（404），
 // 存在但属于别人 -> Forbidden（403）。把两种错误分开是安全语义的一部分——
 // 这里选择不隐藏资源存在性（不拿 404 冒充 403），因为商品本来就是公开可读的，
