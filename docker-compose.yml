@@ -155,6 +155,35 @@ services:
       - "4317:4317"
     restart: unless-stopped
 
+  # 指标后端（阶段 2D 下半程）：pull 模式，每 5s 主动抓三个服务的
+  # /metrics 端点（网关 :8080，两个 gRPC 服务 :9464）。本地不挂数据卷，
+  # 时间序列随容器删——和 Jaeger 内存存储同一个取舍。
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "${PROM_HOST_PORT:-9090}:9090"
+    restart: unless-stopped
+
+  # 面板层：provisioning 自动配好 Prometheus/Jaeger 数据源并加载
+  # deploy/grafana/provisioning/dashboards/ 下的面板 JSON，容器起来即开箱。
+  # 默认账号 admin / admin（GF_SECURITY_ADMIN_PASSWORD 可在 .env 覆盖）。
+  grafana:
+    image: grafana/grafana:12.0.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "${GRAFANA_HOST_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
 volumes:
   mysql-data:
   redis-data:

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,6 +14,7 @@ import (
 
 	"go.uber.org/zap"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -63,6 +65,8 @@ func main() {
 	// 链路追踪（阶段 2D）：作为被调方，负责从 gRPC metadata 里提取上游
 	// 传播来的 trace 上下文并延续 span——网关和本服务因此能连成一条链。
 	var tracerProvider *sdktrace.TracerProvider
+	var meterProvider *sdkmetric.MeterProvider
+	var metricsHandler http.Handler
 	if cfg.Telemetry.Enabled {
 		tracerProvider, err = telemetry.Setup(ctx, telemetry.Config{
 			ServiceName:  "user-service",
@@ -71,6 +75,13 @@ func main() {
 		})
 		if err != nil {
 			log.Fatal("init telemetry", zap.Error(err))
+		}
+		// 指标支柱（阶段 2D 下半程）：全局 MeterProvider 一设，
+		// otelgrpc 服务端 handler 的每方法调用数/耗时指标自动出现——
+		// 上半程选 stats.Handler 埋点的分红，这里一行埋点都不用加。
+		meterProvider, metricsHandler, err = telemetry.SetupMetrics()
+		if err != nil {
+			log.Fatal("init metrics", zap.Error(err))
 		}
 	}
 
@@ -97,8 +108,9 @@ func main() {
 	// 的 ctx 一路传到 SQL，这就是"trace 贯穿到存储层"的最后一环。
 	// WithoutQueryVariables：不把查询参数（含密码哈希）记进 span 属性，
 	// 观测数据会进 Jaeger 这类几乎无访问控制的系统，敏感值不能落进去。
-	// WithoutMetrics：指标部分留给 2D 后半程接 Prometheus 时再开。
-	if err := db.Use(gormotel.NewPlugin(gormotel.WithoutQueryVariables(), gormotel.WithoutMetrics())); err != nil {
+	// 指标（2D 下半程）不再禁用：插件读全局 MeterProvider，
+	// SQL 耗时/错误指标随 SetupMetrics 自动开始上报。
+	if err := db.Use(gormotel.NewPlugin(gormotel.WithoutQueryVariables())); err != nil {
 		log.Fatal("attach gorm otel plugin", zap.Error(err))
 	}
 	// 带锁迁移：K8s 下 Deployment 是 2 副本，两个 Pod 同时启动时
@@ -133,16 +145,44 @@ func main() {
 		log.Fatal("failed to listen", zap.String("addr", addr), zap.Error(err))
 	}
 
+	// /metrics 运维端点：独立于 gRPC 业务端口的小 HTTP 服务（业务/运维
+	// 端口分离，K8s 下可只对内网放开它）。gRPC 服务没有 gin 引擎可挂，
+	// 所以不像网关那样复用业务端口。
+	var metricsSrv *http.Server
+	if metricsHandler != nil {
+		metricsSrv = telemetry.NewMetricsServer(metricsHandler)
+		go func() {
+			log.Info("metrics endpoint listening", zap.Int("port", telemetry.MetricsPort))
+			if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Error("metrics server stopped with error", zap.Error(err))
+			}
+		}()
+	}
+
 	go func() {
 		<-ctx.Done()
 		log.Info("shutting down user-service")
 		grpcServer.GracefulStop()
+		if metricsSrv != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
+				log.Error("metrics server shutdown", zap.Error(err))
+			}
+		}
 		// 停服后 flush 未导出的 span，理由见 api-gateway main.go。
 		if tracerProvider != nil {
 			flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := tracerProvider.Shutdown(flushCtx); err != nil {
 				log.Error("trace provider shutdown", zap.Error(err))
+			}
+		}
+		if meterProvider != nil {
+			flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := meterProvider.Shutdown(flushCtx); err != nil {
+				log.Error("meter provider shutdown", zap.Error(err))
 			}
 		}
 	}()

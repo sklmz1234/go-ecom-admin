@@ -3,6 +3,8 @@
 package router
 
 import (
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 	"go.uber.org/zap"
@@ -27,7 +29,11 @@ const (
 // 自己判断要不要校验 token。
 //
 // log 用于访问日志中间件（带 trace_id 的那行 access log，见 accesslog.go）。
-func New(h *handler.Handler, jwtSecret string, log *zap.Logger) *gin.Engine {
+//
+// metricsHandler 是 /metrics 端点的处理器（阶段 2D 指标）：telemetry 开启时
+// 由 main 传入 telemetry.SetupMetrics 的返回值；为 nil 表示指标未启用，
+// 不注册端点——请求 /metrics 会得到和业务 404 一致的行为，不暴露任何信息。
+func New(h *handler.Handler, jwtSecret string, log *zap.Logger, metricsHandler http.Handler) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	// otelgin 放在限流之前：被限流拒绝的请求也会留下"被拒绝"的 trace，
@@ -35,6 +41,9 @@ func New(h *handler.Handler, jwtSecret string, log *zap.Logger) *gin.Engine {
 	// telemetry 未启用时全局 provider 是 noop，span 自动变成空操作，零开销。
 	r.Use(otelgin.Middleware("api-gateway"))
 	r.Use(middleware.AccessLog(log))
+	// HTTP 指标（QPS/P99/错误率的数据源）：标签用路由模式防基数爆炸，
+	// 细节见 httpmetrics.go 的包注释。
+	r.Use(middleware.HTTPMetrics())
 	// 限流是所有中间件里最外层的一道：比 JWT 验签更早执行才省钱，
 	// 且未登录接口（/auth/login）也受它保护。
 	r.Use(middleware.RateLimit(rateLimitPerSecond, rateLimitBurst))
@@ -42,6 +51,12 @@ func New(h *handler.Handler, jwtSecret string, log *zap.Logger) *gin.Engine {
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
+	if metricsHandler != nil {
+		// 复用网关的 HTTP 端口暴露指标（两个 gRPC 服务则走独立 :9464，
+		// 见 cmd/*/main.go）。本地开发无所谓；生产环境应在 Ingress /
+		// LB 层拦掉外网对 /metrics 的访问。
+		r.GET("/metrics", gin.WrapH(metricsHandler))
+	}
 
 	auth := middleware.Auth(jwtSecret)
 
