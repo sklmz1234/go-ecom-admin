@@ -85,3 +85,22 @@ func TestListByUser(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), total)
 }
+
+// UpdateStatus 条件更新：PENDING→CANCELLED 成功一次，第二次（并发双击取消的
+// 数据库侧兜底）RowsAffected==0 翻译成 FailedPrecondition。
+func TestUpdateStatus(t *testing.T) {
+	repo := NewGormRepository(newSQLiteDB(t))
+	ctx := context.Background()
+	o := &model.Order{UserID: 42, Status: model.StatusPending}
+	require.NoError(t, repo.Create(ctx, o))
+
+	require.NoError(t, repo.UpdateStatus(ctx, o.ID, model.StatusPending, model.StatusCancelled))
+
+	got, err := repo.GetByID(ctx, o.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.StatusCancelled, got.Status)
+
+	// 第二次迁移：状态已不是 PENDING，条件不满足
+	requireAppCode(t, repo.UpdateStatus(ctx, o.ID, model.StatusPending, model.StatusCancelled),
+		apperrors.CodeFailedPrecondition)
+}

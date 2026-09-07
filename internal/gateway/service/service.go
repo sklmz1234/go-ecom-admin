@@ -137,6 +137,14 @@ func (s *Service) ListMyOrders(ctx context.Context, userID uint64, req model.Lis
 	return &model.ListOrdersResponse{Orders: dtos, Total: total}, nil
 }
 
+func (s *Service) CancelOrder(ctx context.Context, userID, id uint64) (*model.OrderDTO, error) {
+	o, err := s.orderClient.CancelOrder(identity.InjectOutgoing(ctx, userID), id)
+	if err != nil {
+		return nil, err
+	}
+	return orderToDTO(o), nil
+}
+
 func userToDTO(u *userpb.User) *model.UserDTO {
 	return &model.UserDTO{
 		ID:        u.GetId(),

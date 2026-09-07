@@ -207,3 +207,14 @@ func (c *OrderClient) ListMyOrders(ctx context.Context, page, pageSize int32) ([
 	}
 	return resp.GetOrders(), resp.GetTotal(), nil
 }
+
+func (c *OrderClient) CancelOrder(ctx context.Context, id uint64) (*orderpb.Order, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
+	defer cancel()
+
+	resp, err := c.client.CancelOrder(ctx, &orderpb.CancelOrderRequest{Id: id})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetOrder(), nil
+}

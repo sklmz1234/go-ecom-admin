@@ -235,6 +235,30 @@ func (h *Handler) ListMyOrders(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// CancelOrder 对应 POST /api/v1/orders/:id/cancel。动作用子资源路径而不是
+// DELETE /orders/:id：取消不是删除——订单记录必须保留（对账、历史），
+// 只是状态机走 PENDING → CANCELLED。
+func (h *Handler) CancelOrder(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+
+	userID, ok := middleware.UserIDFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing caller identity"})
+		return
+	}
+
+	order, err := h.svc.CancelOrder(c.Request.Context(), userID, id)
+	if err != nil {
+		h.respondGRPCError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, order)
+}
+
 // respondGRPCError 把下游 gRPC 服务返回的 status error 翻译成 HTTP 状态码。
 // 这是 pkg/errors.ToHTTPStatus 唯一的调用点——gateway 里所有 handler 共用同一套翻译规则。
 func (h *Handler) respondGRPCError(c *gin.Context, err error) {

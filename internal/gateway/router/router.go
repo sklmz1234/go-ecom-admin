@@ -85,6 +85,7 @@ func New(h *handler.Handler, jwtSecret string, log *zap.Logger, metricsHandler h
 		orders.POST("", auth, h.CreateOrder)
 		orders.GET("", auth, h.ListMyOrders)
 		orders.GET("/:id", auth, h.GetOrder)
+		orders.POST("/:id/cancel", auth, h.CancelOrder)
 	}
 
 	return r
