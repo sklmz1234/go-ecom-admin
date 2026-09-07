@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"go-ecom-admin/pkg/config"
@@ -53,6 +54,8 @@ func main() {
 	// 选择 Fatal——追踪地址配错属于部署错误，带着错误配置"静默降级"会让
 	// 人误以为追踪正常，排障时才发现 Jaeger 上一条数据都没有。
 	var tracerProvider *sdktrace.TracerProvider
+	var meterProvider *sdkmetric.MeterProvider
+	var metricsHandler http.Handler
 	if cfg.Telemetry.Enabled {
 		tracerProvider, err = telemetry.Setup(ctx, telemetry.Config{
 			ServiceName:  "api-gateway",
@@ -61,6 +64,13 @@ func main() {
 		})
 		if err != nil {
 			log.Fatal("init telemetry", zap.Error(err))
+		}
+		// 指标支柱（阶段 2D 下半程）：与 trace 同一个 OTel SDK，区别是
+		// pull 模式——进程内挂 /metrics 端点，Prometheus 定时来拉。
+		// 全局 MeterProvider 一设，otelgrpc 客户端的 gRPC 指标也自动出现。
+		meterProvider, metricsHandler, err = telemetry.SetupMetrics()
+		if err != nil {
+			log.Fatal("init metrics", zap.Error(err))
 		}
 		log.Info("telemetry enabled",
 			zap.String("otlp_endpoint", cfg.Telemetry.OTLPEndpoint),
@@ -80,7 +90,7 @@ func main() {
 
 	svc := service.New(userClient, productClient)
 	h := handler.New(svc, log)
-	engine := router.New(h, cfg.JWT.Secret, log)
+	engine := router.New(h, cfg.JWT.Secret, log, metricsHandler)
 
 	addr := fmt.Sprintf(":%d", cfg.Server.APIGateway.HTTPPort)
 	httpServer := &http.Server{
@@ -101,6 +111,13 @@ func main() {
 		if tracerProvider != nil {
 			if err := tracerProvider.Shutdown(shutdownCtx); err != nil {
 				log.Error("trace provider shutdown", zap.Error(err))
+			}
+		}
+		// pull 模式的指标没有待发缓冲，Shutdown 只是停掉收集协程、
+		// 干净退出（不像 trace 那样关系数据丢失）。
+		if meterProvider != nil {
+			if err := meterProvider.Shutdown(shutdownCtx); err != nil {
+				log.Error("meter provider shutdown", zap.Error(err))
 			}
 		}
 	}()

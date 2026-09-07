@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,6 +15,7 @@ import (
 
 	"go.uber.org/zap"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -63,6 +65,8 @@ func main() {
 
 	// 链路追踪（阶段 2D）：理由见 cmd/user-service/main.go。
 	var tracerProvider *sdktrace.TracerProvider
+	var meterProvider *sdkmetric.MeterProvider
+	var metricsHandler http.Handler
 	if cfg.Telemetry.Enabled {
 		tracerProvider, err = telemetry.Setup(ctx, telemetry.Config{
 			ServiceName:  "product-service",
@@ -71,6 +75,12 @@ func main() {
 		})
 		if err != nil {
 			log.Fatal("init telemetry", zap.Error(err))
+		}
+		// 指标支柱（2D 下半程），理由见 cmd/user-service/main.go：
+		// MeterProvider 设置后 otelgrpc 指标自动出现。
+		meterProvider, metricsHandler, err = telemetry.SetupMetrics()
+		if err != nil {
+			log.Fatal("init metrics", zap.Error(err))
 		}
 	}
 
@@ -87,7 +97,8 @@ func main() {
 		log.Fatal("failed to connect to MySQL", zap.Error(err))
 	}
 	// SQL span 埋点，理由见 cmd/user-service/main.go。
-	if err := db.Use(gormotel.NewPlugin(gormotel.WithoutQueryVariables(), gormotel.WithoutMetrics())); err != nil {
+	// 指标（2D 下半程）不再禁用，随全局 MeterProvider 自动上报。
+	if err := db.Use(gormotel.NewPlugin(gormotel.WithoutQueryVariables())); err != nil {
 		log.Fatal("attach gorm otel plugin", zap.Error(err))
 	}
 	// 带锁迁移，理由见 cmd/user-service/main.go：多副本并发建表竞态。
@@ -132,16 +143,42 @@ func main() {
 		log.Fatal("failed to listen", zap.String("addr", addr), zap.Error(err))
 	}
 
+	// /metrics 运维端点，理由见 cmd/user-service/main.go：业务/运维端口分离。
+	var metricsSrv *http.Server
+	if metricsHandler != nil {
+		metricsSrv = telemetry.NewMetricsServer(metricsHandler)
+		go func() {
+			log.Info("metrics endpoint listening", zap.Int("port", telemetry.MetricsPort))
+			if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Error("metrics server stopped with error", zap.Error(err))
+			}
+		}()
+	}
+
 	go func() {
 		<-ctx.Done()
 		log.Info("shutting down product-service")
 		grpcServer.GracefulStop()
+		if metricsSrv != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
+				log.Error("metrics server shutdown", zap.Error(err))
+			}
+		}
 		// 停服后 flush 未导出的 span，理由见 api-gateway main.go。
 		if tracerProvider != nil {
 			flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := tracerProvider.Shutdown(flushCtx); err != nil {
 				log.Error("trace provider shutdown", zap.Error(err))
+			}
+		}
+		if meterProvider != nil {
+			flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := meterProvider.Shutdown(flushCtx); err != nil {
+				log.Error("meter provider shutdown", zap.Error(err))
 			}
 		}
 	}()

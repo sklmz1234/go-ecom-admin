@@ -1,0 +1,11 @@
+# Dashboard provisioning：自动加载同目录下的面板 JSON，
+# 每 10s 扫一次文件变化——改完 JSON 不用重启容器就能看效果。
+apiVersion: 1
+
+providers:
+  - name: go-ecom-admin
+    folder: go-ecom-admin
+    type: file
+    updateIntervalSeconds: 10
+    options:
+      path: /etc/grafana/provisioning/dashboards
