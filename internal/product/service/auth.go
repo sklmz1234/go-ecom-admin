@@ -1,4 +1,4 @@
-// userIDFromContext 从 gRPC incoming metadata 里取出调用方身份。
+// Package service userIDFromContext 从 gRPC incoming metadata 里取出调用方身份。
 //
 // 这就是零信任原则的落地点：product-service 不信任任何上游（包括 api-gateway）
 // 关于"这是谁的请求"的口头声明之外的任何东西——但它要求上游必须声明身份。

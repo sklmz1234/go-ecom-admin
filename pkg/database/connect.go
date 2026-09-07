@@ -1,4 +1,4 @@
-// connect.go：带退避的数据库连接重试。
+// Package database connect.go：带退避的数据库连接重试。
 //
 // 为什么需要它：Docker daemon 重启后，所有 restart: unless-stopped 的容器
 // 会被**并行**拉起——compose 的 depends_on: service_healthy 只在
