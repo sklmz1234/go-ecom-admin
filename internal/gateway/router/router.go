@@ -4,6 +4,8 @@ package router
 
 import (
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+	"go.uber.org/zap"
 	"golang.org/x/time/rate"
 
 	"go-ecom-admin/internal/gateway/handler"
@@ -23,9 +25,16 @@ const (
 // New 需要 jwtSecret 才能组装出鉴权中间件——路由表是唯一决定"哪些接口
 // 需要登录"的地方，所以中间件的接入点也放在这里，而不是让每个 handler
 // 自己判断要不要校验 token。
-func New(h *handler.Handler, jwtSecret string) *gin.Engine {
+//
+// log 用于访问日志中间件（带 trace_id 的那行 access log，见 accesslog.go）。
+func New(h *handler.Handler, jwtSecret string, log *zap.Logger) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
+	// otelgin 放在限流之前：被限流拒绝的请求也会留下"被拒绝"的 trace，
+	// 否则攻击/突发流量在追踪系统里就是黑洞，排查"为什么全 429"没有数据。
+	// telemetry 未启用时全局 provider 是 noop，span 自动变成空操作，零开销。
+	r.Use(otelgin.Middleware("api-gateway"))
+	r.Use(middleware.AccessLog(log))
 	// 限流是所有中间件里最外层的一道：比 JWT 验签更早执行才省钱，
 	// 且未登录接口（/auth/login）也受它保护。
 	r.Use(middleware.RateLimit(rateLimitPerSecond, rateLimitBurst))

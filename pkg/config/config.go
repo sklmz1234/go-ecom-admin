@@ -24,6 +24,7 @@ type Config struct {
 	JWT        JWTConfig        `mapstructure:"jwt"`
 	Server     ServerConfig     `mapstructure:"server"`
 	GRPCClient GRPCClientConfig `mapstructure:"grpc_client"`
+	Telemetry  TelemetryConfig  `mapstructure:"telemetry"`
 }
 
 type AppConfig struct {
@@ -97,6 +98,18 @@ type GRPCServerConfig struct {
 type GRPCClientConfig struct {
 	UserServiceAddr    string `mapstructure:"user_service_addr"`
 	ProductServiceAddr string `mapstructure:"product_service_addr"`
+}
+
+// TelemetryConfig 是链路追踪（阶段 2D）的开关与端点配置。三个服务共用一份
+// yaml，但 service 名不在这里——它由各 main.go 调 telemetry.Setup 时显式
+// 传入（同一份配置文件要能描述三个不同服务，服务名是"进程身份"不是"环境属性"）。
+// 环境变量覆盖（Viper AutomaticEnv，"." → "_"）：
+//   - TELEMETRY_ENABLED=false          裸 go run 不起 Jaeger 时关掉追踪
+//   - TELEMETRY_OTLP_ENDPOINT=jaeger:4317  容器网络内指向 compose 的 Jaeger
+type TelemetryConfig struct {
+	Enabled      bool    `mapstructure:"enabled"`
+	OTLPEndpoint string  `mapstructure:"otlp_endpoint"`
+	SampleRatio  float64 `mapstructure:"sample_ratio"`
 }
 
 // Load 从 path 指向的 yaml 文件加载配置，并允许同名环境变量覆盖
