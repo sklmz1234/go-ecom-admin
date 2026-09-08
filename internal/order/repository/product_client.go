@@ -18,7 +18,9 @@ import (
 type ProductClient interface {
 	// DeductStock 成功时返回扣减结果（含 price_cents/name 快照）。
 	DeductStock(ctx context.Context, productID uint64, quantity int32) (*productpb.DeductStockResponse, error)
-	RestoreStock(ctx context.Context, productID uint64, quantity int32) error
+	// RestoreStock 的 messageID 非空时走 product 侧幂等路径（outbox relay
+	// 投递），为空是同步补偿的老语义——契约见 proto RestoreStockRequest。
+	RestoreStock(ctx context.Context, productID uint64, quantity int32, messageID string) error
 }
 
 // defaultCallTimeout 与 api-gateway 的下游调用超时保持一致。
@@ -56,13 +58,14 @@ func (c *grpcProductClient) DeductStock(ctx context.Context, productID uint64, q
 	})
 }
 
-func (c *grpcProductClient) RestoreStock(ctx context.Context, productID uint64, quantity int32) error {
+func (c *grpcProductClient) RestoreStock(ctx context.Context, productID uint64, quantity int32, messageID string) error {
 	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
 	defer cancel()
 
 	_, err := c.client.RestoreStock(ctx, &productpb.RestoreStockRequest{
-		ProductId: productID,
-		Quantity:  quantity,
+		ProductId:  productID,
+		Quantity:   quantity,
+		MessageId:  messageID,
 	})
 	return err
 }

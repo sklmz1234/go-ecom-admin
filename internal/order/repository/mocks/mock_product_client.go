@@ -82,17 +82,17 @@ func (_c *MockProductClient_DeductStock_Call) RunAndReturn(run func(context.Cont
 	return _c
 }
 
-// RestoreStock provides a mock function with given fields: ctx, productID, quantity
-func (_m *MockProductClient) RestoreStock(ctx context.Context, productID uint64, quantity int32) error {
-	ret := _m.Called(ctx, productID, quantity)
+// RestoreStock provides a mock function with given fields: ctx, productID, quantity, messageID
+func (_m *MockProductClient) RestoreStock(ctx context.Context, productID uint64, quantity int32, messageID string) error {
+	ret := _m.Called(ctx, productID, quantity, messageID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for RestoreStock")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, uint64, int32) error); ok {
-		r0 = rf(ctx, productID, quantity)
+	if rf, ok := ret.Get(0).(func(context.Context, uint64, int32, string) error); ok {
+		r0 = rf(ctx, productID, quantity, messageID)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -109,13 +109,14 @@ type MockProductClient_RestoreStock_Call struct {
 //   - ctx context.Context
 //   - productID uint64
 //   - quantity int32
-func (_e *MockProductClient_Expecter) RestoreStock(ctx interface{}, productID interface{}, quantity interface{}) *MockProductClient_RestoreStock_Call {
-	return &MockProductClient_RestoreStock_Call{Call: _e.mock.On("RestoreStock", ctx, productID, quantity)}
+//   - messageID string
+func (_e *MockProductClient_Expecter) RestoreStock(ctx interface{}, productID interface{}, quantity interface{}, messageID interface{}) *MockProductClient_RestoreStock_Call {
+	return &MockProductClient_RestoreStock_Call{Call: _e.mock.On("RestoreStock", ctx, productID, quantity, messageID)}
 }
 
-func (_c *MockProductClient_RestoreStock_Call) Run(run func(ctx context.Context, productID uint64, quantity int32)) *MockProductClient_RestoreStock_Call {
+func (_c *MockProductClient_RestoreStock_Call) Run(run func(ctx context.Context, productID uint64, quantity int32, messageID string)) *MockProductClient_RestoreStock_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(uint64), args[2].(int32))
+		run(args[0].(context.Context), args[1].(uint64), args[2].(int32), args[3].(string))
 	})
 	return _c
 }
@@ -125,7 +126,7 @@ func (_c *MockProductClient_RestoreStock_Call) Return(_a0 error) *MockProductCli
 	return _c
 }
 
-func (_c *MockProductClient_RestoreStock_Call) RunAndReturn(run func(context.Context, uint64, int32) error) *MockProductClient_RestoreStock_Call {
+func (_c *MockProductClient_RestoreStock_Call) RunAndReturn(run func(context.Context, uint64, int32, string) error) *MockProductClient_RestoreStock_Call {
 	_c.Call.Return(run)
 	return _c
 }
