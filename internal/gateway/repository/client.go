@@ -9,7 +9,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/sony/gobreaker"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
@@ -24,7 +26,8 @@ const defaultCallTimeout = 3 * time.Second
 
 // UserClient 封装对 user-service 的 gRPC 调用。
 type UserClient struct {
-	client userpb.UserServiceClient
+	client  userpb.UserServiceClient
+	breaker *gobreaker.CircuitBreaker
 }
 
 // otelStatsHandler 是两个 gRPC 客户端共用的 stats handler：每次 RPC 把
@@ -39,7 +42,8 @@ var otelStatsHandler = otelgrpc.NewClientHandler()
 // grpc.NewClient 是非阻塞的——它只做地址解析和惰性连接管理，不会在这里
 // 真的发起网络连接，所以即使 user-service 还没启动，api-gateway 也能正常起来
 // （请求到来时才会真正建连，失败了也只是那一次调用报错）。
-func NewUserClient(target string) (*UserClient, error) {
+// log 用于熔断器状态迁移的 WARN 日志（breaker.go）。
+func NewUserClient(target string, log *zap.Logger) (*UserClient, error) {
 	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelStatsHandler),
@@ -47,14 +51,19 @@ func NewUserClient(target string) (*UserClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &UserClient{client: userpb.NewUserServiceClient(conn)}, nil
+	return &UserClient{
+		client:  userpb.NewUserServiceClient(conn),
+		breaker: newBreaker("user-service", log),
+	}, nil
 }
 
 func (c *UserClient) GetUser(ctx context.Context, id uint64) (*userpb.User, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
 	defer cancel()
 
-	resp, err := c.client.GetUser(ctx, &userpb.GetUserRequest{Id: id})
+	resp, err := callWithBreaker(c.breaker, func() (*userpb.GetUserResponse, error) {
+		return c.client.GetUser(ctx, &userpb.GetUserRequest{Id: id})
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -65,11 +74,19 @@ func (c *UserClient) Register(ctx context.Context, username, email, password str
 	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
 	defer cancel()
 
-	resp, err := c.client.Register(ctx, &userpb.RegisterRequest{Username: username, Email: email, Password: password})
+	resp, err := callWithBreaker(c.breaker, func() (*userpb.RegisterResponse, error) {
+		return c.client.Register(ctx, &userpb.RegisterRequest{Username: username, Email: email, Password: password})
+	})
 	if err != nil {
 		return nil, err
 	}
 	return resp.GetUser(), nil
+}
+
+// loginResult 是 Login 多返回值过泛型 helper 的打包类型。
+type loginResult struct {
+	token string
+	user  *userpb.User
 }
 
 // Login 返回 (token, user)，token 的生成在 user-service 完成——gateway
@@ -78,19 +95,26 @@ func (c *UserClient) Login(ctx context.Context, username, password string) (stri
 	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
 	defer cancel()
 
-	resp, err := c.client.Login(ctx, &userpb.LoginRequest{Username: username, Password: password})
+	res, err := callWithBreaker(c.breaker, func() (loginResult, error) {
+		resp, err := c.client.Login(ctx, &userpb.LoginRequest{Username: username, Password: password})
+		if err != nil {
+			return loginResult{}, err
+		}
+		return loginResult{token: resp.GetToken(), user: resp.GetUser()}, nil
+	})
 	if err != nil {
 		return "", nil, err
 	}
-	return resp.GetToken(), resp.GetUser(), nil
+	return res.token, res.user, nil
 }
 
 // ProductClient 封装对 product-service 的 gRPC 调用。
 type ProductClient struct {
-	client productpb.ProductServiceClient
+	client  productpb.ProductServiceClient
+	breaker *gobreaker.CircuitBreaker
 }
 
-func NewProductClient(target string) (*ProductClient, error) {
+func NewProductClient(target string, log *zap.Logger) (*ProductClient, error) {
 	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelStatsHandler),
@@ -98,14 +122,19 @@ func NewProductClient(target string) (*ProductClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ProductClient{client: productpb.NewProductServiceClient(conn)}, nil
+	return &ProductClient{
+		client:  productpb.NewProductServiceClient(conn),
+		breaker: newBreaker("product-service", log),
+	}, nil
 }
 
 func (c *ProductClient) GetProduct(ctx context.Context, id uint64) (*productpb.Product, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
 	defer cancel()
 
-	resp, err := c.client.GetProduct(ctx, &productpb.GetProductRequest{Id: id})
+	resp, err := callWithBreaker(c.breaker, func() (*productpb.GetProductResponse, error) {
+		return c.client.GetProduct(ctx, &productpb.GetProductRequest{Id: id})
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -116,8 +145,10 @@ func (c *ProductClient) CreateProduct(ctx context.Context, name string, priceCen
 	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
 	defer cancel()
 
-	resp, err := c.client.CreateProduct(ctx, &productpb.CreateProductRequest{
-		Name: name, PriceCents: priceCents, Stock: stock,
+	resp, err := callWithBreaker(c.breaker, func() (*productpb.CreateProductResponse, error) {
+		return c.client.CreateProduct(ctx, &productpb.CreateProductRequest{
+			Name: name, PriceCents: priceCents, Stock: stock,
+		})
 	})
 	if err != nil {
 		return nil, err
@@ -129,8 +160,10 @@ func (c *ProductClient) UpdateProduct(ctx context.Context, id uint64, name strin
 	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
 	defer cancel()
 
-	resp, err := c.client.UpdateProduct(ctx, &productpb.UpdateProductRequest{
-		Id: id, Name: name, PriceCents: priceCents, Stock: stock,
+	resp, err := callWithBreaker(c.breaker, func() (*productpb.UpdateProductResponse, error) {
+		return c.client.UpdateProduct(ctx, &productpb.UpdateProductRequest{
+			Id: id, Name: name, PriceCents: priceCents, Stock: stock,
+		})
 	})
 	if err != nil {
 		return nil, err
@@ -142,27 +175,42 @@ func (c *ProductClient) DeleteProduct(ctx context.Context, id uint64) error {
 	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
 	defer cancel()
 
-	_, err := c.client.DeleteProduct(ctx, &productpb.DeleteProductRequest{Id: id})
+	_, err := callWithBreaker(c.breaker, func() (*productpb.DeleteProductResponse, error) {
+		return c.client.DeleteProduct(ctx, &productpb.DeleteProductRequest{Id: id})
+	})
 	return err
+}
+
+// listProductsResult 是 ListProducts 多返回值过泛型 helper 的打包类型。
+type listProductsResult struct {
+	products []*productpb.Product
+	total    int64
 }
 
 func (c *ProductClient) ListProducts(ctx context.Context, page, pageSize int32) ([]*productpb.Product, int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
 	defer cancel()
 
-	resp, err := c.client.ListProducts(ctx, &productpb.ListProductsRequest{Page: page, PageSize: pageSize})
+	res, err := callWithBreaker(c.breaker, func() (listProductsResult, error) {
+		resp, err := c.client.ListProducts(ctx, &productpb.ListProductsRequest{Page: page, PageSize: pageSize})
+		if err != nil {
+			return listProductsResult{}, err
+		}
+		return listProductsResult{products: resp.GetProducts(), total: resp.GetTotal()}, nil
+	})
 	if err != nil {
 		return nil, 0, err
 	}
-	return resp.GetProducts(), resp.GetTotal(), nil
+	return res.products, res.total, nil
 }
 
 // OrderClient 封装对 order-service 的 gRPC 调用（阶段 3）。
 type OrderClient struct {
-	client orderpb.OrderServiceClient
+	client  orderpb.OrderServiceClient
+	breaker *gobreaker.CircuitBreaker
 }
 
-func NewOrderClient(target string) (*OrderClient, error) {
+func NewOrderClient(target string, log *zap.Logger) (*OrderClient, error) {
 	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelStatsHandler),
@@ -170,7 +218,10 @@ func NewOrderClient(target string) (*OrderClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &OrderClient{client: orderpb.NewOrderServiceClient(conn)}, nil
+	return &OrderClient{
+		client:  orderpb.NewOrderServiceClient(conn),
+		breaker: newBreaker("order-service", log),
+	}, nil
 }
 
 // CreateOrder 的 ctx 必须已由 service 层注入调用方身份（pkg/identity）——
@@ -179,7 +230,9 @@ func (c *OrderClient) CreateOrder(ctx context.Context, items []*orderpb.CreateOr
 	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
 	defer cancel()
 
-	resp, err := c.client.CreateOrder(ctx, &orderpb.CreateOrderRequest{Items: items})
+	resp, err := callWithBreaker(c.breaker, func() (*orderpb.CreateOrderResponse, error) {
+		return c.client.CreateOrder(ctx, &orderpb.CreateOrderRequest{Items: items})
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -190,29 +243,45 @@ func (c *OrderClient) GetOrder(ctx context.Context, id uint64) (*orderpb.Order, 
 	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
 	defer cancel()
 
-	resp, err := c.client.GetOrder(ctx, &orderpb.GetOrderRequest{Id: id})
+	resp, err := callWithBreaker(c.breaker, func() (*orderpb.GetOrderResponse, error) {
+		return c.client.GetOrder(ctx, &orderpb.GetOrderRequest{Id: id})
+	})
 	if err != nil {
 		return nil, err
 	}
 	return resp.GetOrder(), nil
 }
 
+// listOrdersResult 是 ListMyOrders 多返回值过泛型 helper 的打包类型。
+type listOrdersResult struct {
+	orders []*orderpb.Order
+	total  int64
+}
+
 func (c *OrderClient) ListMyOrders(ctx context.Context, page, pageSize int32) ([]*orderpb.Order, int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
 	defer cancel()
 
-	resp, err := c.client.ListMyOrders(ctx, &orderpb.ListMyOrdersRequest{Page: page, PageSize: pageSize})
+	res, err := callWithBreaker(c.breaker, func() (listOrdersResult, error) {
+		resp, err := c.client.ListMyOrders(ctx, &orderpb.ListMyOrdersRequest{Page: page, PageSize: pageSize})
+		if err != nil {
+			return listOrdersResult{}, err
+		}
+		return listOrdersResult{orders: resp.GetOrders(), total: resp.GetTotal()}, nil
+	})
 	if err != nil {
 		return nil, 0, err
 	}
-	return resp.GetOrders(), resp.GetTotal(), nil
+	return res.orders, res.total, nil
 }
 
 func (c *OrderClient) CancelOrder(ctx context.Context, id uint64) (*orderpb.Order, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
 	defer cancel()
 
-	resp, err := c.client.CancelOrder(ctx, &orderpb.CancelOrderRequest{Id: id})
+	resp, err := callWithBreaker(c.breaker, func() (*orderpb.CancelOrderResponse, error) {
+		return c.client.CancelOrder(ctx, &orderpb.CancelOrderRequest{Id: id})
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -72,6 +72,8 @@ func TestToHTTPStatus(t *testing.T) {
 		{"gRPCAlreadyExists映射409", status.Error(codes.AlreadyExists, "conflict"), http.StatusConflict, "conflict"},
 		{"gRPCUnauthenticated映射401", status.Error(codes.Unauthenticated, "no token"), http.StatusUnauthorized, "no token"},
 		{"gRPCFailedPrecondition映射409", status.Error(codes.FailedPrecondition, "insufficient stock"), http.StatusConflict, "insufficient stock"},
+		{"gRPCDeadlineExceeded映射504", status.Error(codes.DeadlineExceeded, "timeout"), http.StatusGatewayTimeout, "downstream service timeout"},
+		{"gRPCUnavailable映射503", status.Error(codes.Unavailable, "connection refused"), http.StatusServiceUnavailable, "connection refused"},
 		{"非gRPC错误映射500", errors.New("boom"), http.StatusInternalServerError, "internal error"},
 	}
 

@@ -147,6 +147,14 @@ func ToHTTPStatus(err error) (int, string) {
 	case codes.FailedPrecondition:
 		// 库存不足这类"状态冲突"语义，HTTP 世界的对应物是 409。
 		return http.StatusConflict, st.Message()
+	case codes.DeadlineExceeded:
+		// 网关对下游的调用超时（repository 层 defaultCallTimeout）——
+		// 504 是"我作为网关/代理，上游没及时回我"的标准语义。
+		return http.StatusGatewayTimeout, "downstream service timeout"
+	case codes.Unavailable:
+		// 下游连不上，或熔断器打开的快速失败（breaker.go 把 ErrOpenState
+		// 翻译成 Unavailable）——503 语义是"暂时不可用，可稍后重试"。
+		return http.StatusServiceUnavailable, st.Message()
 	case codes.OK:
 		return http.StatusOK, ""
 	default:

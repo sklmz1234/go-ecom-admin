@@ -79,15 +79,15 @@ func main() {
 
 	// grpc.NewClient 是非阻塞的：即使 user-service / product-service 还没启动，
 	// 这里也不会报错，真正的连接尝试发生在第一次 RPC 调用时。
-	userClient, err := repository.NewUserClient(cfg.GRPCClient.UserServiceAddr)
+	userClient, err := repository.NewUserClient(cfg.GRPCClient.UserServiceAddr, log)
 	if err != nil {
 		log.Fatal("failed to create user-service client", zap.Error(err))
 	}
-	productClient, err := repository.NewProductClient(cfg.GRPCClient.ProductServiceAddr)
+	productClient, err := repository.NewProductClient(cfg.GRPCClient.ProductServiceAddr, log)
 	if err != nil {
 		log.Fatal("failed to create product-service client", zap.Error(err))
 	}
-	orderClient, err := repository.NewOrderClient(cfg.GRPCClient.OrderServiceAddr)
+	orderClient, err := repository.NewOrderClient(cfg.GRPCClient.OrderServiceAddr, log)
 	if err != nil {
 		log.Fatal("failed to create order-service client", zap.Error(err))
 	}
