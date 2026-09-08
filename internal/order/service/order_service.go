@@ -165,8 +165,67 @@ func (s *Service) ListMyOrders(ctx context.Context, req *orderpb.ListMyOrdersReq
 	return &orderpb.ListMyOrdersResponse{Orders: pbOrders, Total: total}, nil
 }
 
-// CancelOrder 留待阶段 3b 实现（PENDING → CANCELLED + RestoreStock 回补），
-// 此处依赖内嵌的 UnimplementedOrderServiceServer 返回 Unimplemented。
+// CancelOrder 把 3A 里"只在失败补偿里用到"的 RestoreStock 变成显式业务路径：
+// PENDING → CANCELLED 单方向流转 + 逐项回补库存。
+//
+// 顺序是精心选的：**先原子迁移状态，再回补库存**。
+// 反过来（先回补再改状态）若改状态失败，订单仍是 PENDING、用户可以再次取消，
+// 同一件库存会被回补两次——比"状态已取消但回补失败"更难收拾。后者留下的是
+// 库存少计的 leak，ERROR 日志 + 对账兜底（与 compensate 同一哲学）；
+// 且状态迁移是条件更新（WHERE status='PENDING'），重复取消在数据库层就被挡住，
+// 不存在重复回补的入口。
+func (s *Service) CancelOrder(ctx context.Context, req *orderpb.CancelOrderRequest) (*orderpb.CancelOrderResponse, error) {
+	callerID, err := identity.FromIncoming(ctx)
+	if err != nil {
+		return nil, apperrors.ToGRPCStatus(err)
+	}
+
+	o, err := s.repo.GetByID(ctx, req.GetId())
+	if err != nil {
+		return nil, apperrors.ToGRPCStatus(err)
+	}
+
+	// 与 GetOrder 同一语义：越权返回 404，不暴露订单号存在性。
+	if o.UserID != callerID {
+		s.log.Warn("order cancel denied",
+			zap.Uint64("order_id", o.ID),
+			zap.Uint64("owner_id", o.UserID),
+			zap.Uint64("caller_id", callerID),
+		)
+		return nil, apperrors.ToGRPCStatus(apperrors.NotFound("order not found", nil))
+	}
+
+	// 状态机守卫：只允许 PENDING → CANCELLED 单方向流转。
+	// 已取消/已支付的订单取消是"请求合法但状态不允许"——FailedPrecondition（409）。
+	if o.Status != model.StatusPending {
+		return nil, apperrors.ToGRPCStatus(apperrors.FailedPrecondition("only pending orders can be cancelled", nil))
+	}
+
+	// 原子迁移（防双击/重试的并发取消），然后逐项回补。
+	if err := s.repo.UpdateStatus(ctx, o.ID, model.StatusPending, model.StatusCancelled); err != nil {
+		return nil, apperrors.ToGRPCStatus(err)
+	}
+
+	callCtx := identity.InjectOutgoing(ctx, callerID)
+	for _, it := range o.Items {
+		if err := s.products.RestoreStock(callCtx, it.ProductID, it.Quantity); err != nil {
+			s.log.Error("CANCEL RESTORE FAILED: stock not restored, manual reconciliation required",
+				zap.Uint64("order_id", o.ID),
+				zap.Uint64("product_id", it.ProductID),
+				zap.Int32("quantity", it.Quantity),
+				zap.Error(err),
+			)
+		}
+	}
+
+	o.Status = model.StatusCancelled
+	s.log.Info("order cancelled",
+		zap.Uint64("order_id", o.ID),
+		zap.Uint64("user_id", callerID),
+		zap.Int("restored_items", len(o.Items)),
+	)
+	return &orderpb.CancelOrderResponse{Order: toProto(o)}, nil
+}
 
 func toProto(o *model.Order) *orderpb.Order {
 	items := make([]*orderpb.OrderItem, 0, len(o.Items))

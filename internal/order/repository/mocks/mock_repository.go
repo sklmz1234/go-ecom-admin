@@ -196,6 +196,55 @@ func (_c *MockRepository_ListByUser_Call) RunAndReturn(run func(context.Context,
 	return _c
 }
 
+// UpdateStatus provides a mock function with given fields: ctx, id, from, to
+func (_m *MockRepository) UpdateStatus(ctx context.Context, id uint64, from string, to string) error {
+	ret := _m.Called(ctx, id, from, to)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateStatus")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, uint64, string, string) error); ok {
+		r0 = rf(ctx, id, from, to)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MockRepository_UpdateStatus_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateStatus'
+type MockRepository_UpdateStatus_Call struct {
+	*mock.Call
+}
+
+// UpdateStatus is a helper method to define mock.On call
+//   - ctx context.Context
+//   - id uint64
+//   - from string
+//   - to string
+func (_e *MockRepository_Expecter) UpdateStatus(ctx interface{}, id interface{}, from interface{}, to interface{}) *MockRepository_UpdateStatus_Call {
+	return &MockRepository_UpdateStatus_Call{Call: _e.mock.On("UpdateStatus", ctx, id, from, to)}
+}
+
+func (_c *MockRepository_UpdateStatus_Call) Run(run func(ctx context.Context, id uint64, from string, to string)) *MockRepository_UpdateStatus_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(uint64), args[2].(string), args[3].(string))
+	})
+	return _c
+}
+
+func (_c *MockRepository_UpdateStatus_Call) Return(_a0 error) *MockRepository_UpdateStatus_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockRepository_UpdateStatus_Call) RunAndReturn(run func(context.Context, uint64, string, string) error) *MockRepository_UpdateStatus_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // NewMockRepository creates a new instance of MockRepository. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewMockRepository(t interface {

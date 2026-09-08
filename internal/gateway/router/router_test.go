@@ -31,6 +31,7 @@ func TestOrders_RequireAuth(t *testing.T) {
 		{"下单", http.MethodPost, "/api/v1/orders", `{"items":[{"product_id":1,"quantity":1}]}`},
 		{"查订单列表", http.MethodGet, "/api/v1/orders", ""},
 		{"查订单详情", http.MethodGet, "/api/v1/orders/1", ""},
+		{"取消订单", http.MethodPost, "/api/v1/orders/1/cancel", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+"未带token返回401", func(t *testing.T) {

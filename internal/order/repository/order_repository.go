@@ -20,6 +20,8 @@ type Repository interface {
 	// ListByUser 只查某个用户自己的订单——订单是私密资源，
 	// 不存在"公开列表"这种形态，查询入口天生带 user_id 过滤。
 	ListByUser(ctx context.Context, userID uint64, page, pageSize int) ([]*model.Order, int64, error)
+	// UpdateStatus 原子状态迁移：仅当当前状态等于 from 时才改成 to。
+	UpdateStatus(ctx context.Context, id uint64, from, to string) error
 }
 
 type gormRepository struct {
@@ -76,4 +78,24 @@ func (r *gormRepository) ListByUser(ctx context.Context, userID uint64, page, pa
 	}
 
 	return orders, total, nil
+}
+
+// UpdateStatus 用条件更新做原子状态迁移：
+// UPDATE orders SET status = to WHERE id = ? AND status = from。
+// 和 DeductStock 同一个思想——状态迁移的"检查当前状态 + 改写"压进一条 SQL，
+// 没有 TOCTOU 窗口：两个并发取消（用户双击、重试）只有一个能命中
+// RowsAffected == 1，另一个 RowsAffected == 0 得到 FailedPrecondition。
+// service 层已先 GetByID 做过存在性/归属/状态检查，这里 RowsAffected == 0
+// 的唯一解释是"检查和迁移之间状态被别人改了"，所以直接映射 FailedPrecondition。
+func (r *gormRepository) UpdateStatus(ctx context.Context, id uint64, from, to string) error {
+	result := r.db.WithContext(ctx).Model(&model.Order{}).
+		Where("id = ? AND status = ?", id, from).
+		Update("status", to)
+	if result.Error != nil {
+		return apperrors.Internal("failed to update order status", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return apperrors.FailedPrecondition("order status changed concurrently", nil)
+	}
+	return nil
 }

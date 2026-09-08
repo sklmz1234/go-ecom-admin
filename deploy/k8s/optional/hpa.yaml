@@ -1,0 +1,54 @@
+# HPA（Horizontal Pod Autoscaler）：按 CPU 利用率自动扩缩 order-service 副本数。
+# 放 optional/ 是因为它不是主链路必需品——`kubectl apply -f deploy/k8s` 不会带上它，
+# 需要时单独 `kubectl apply -f deploy/k8s/optional/hpa.yaml`。
+#
+# 前置依赖：metrics-server。HPA 的 CPU 数据源是 metrics.k8s.io API，
+# 由 metrics-server 提供；kind 集群默认不带，需先安装：
+#   kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+#   （kind 的 kubelet 用自签证书，metrics-server 要加启动参数
+#    --kubelet-insecure-tls：kubectl patch deployment metrics-server -n kube-system \
+#      --type=json -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'）
+#
+# 工作机制：每 15s 从 metrics-server 读所有 Pod 的 CPU 实际用量，
+# 利用率 = 实际用量 / resources.requests.cpu（所以 23-order-service.yaml 的
+# requests 是 HPA 的分母，缺了它 HPA 显示 unknown 且不动作）。
+# 当前均值超过 targetAverageUtilization 就加副本，低于就减，
+# 副本数被夹在 minReplicas/maxReplicas 之间。
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: order-service
+  namespace: ecom
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: order-service
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # 50% 是教学取向的激进值：压测（如 hey/wrk 打下单一）几十秒内
+          # 就能看到 2→4→6 的扩容曲线。生产常见 70-80%——留更多余量应对
+          # 突发，因为扩容到新 Pod 就绪需要分钟级时间。
+          averageUtilization: 50
+  behavior:
+    # 扩容快、缩容慢：流量来了立刻加副本（每个周期最多翻倍），
+    # 流量走了观察 5 分钟稳定窗再慢慢收——防止请求抖动造成副本数震荡
+    # （flapping），这是 autoscaling/v2 的默认值思路，显式写出来便于讲解。
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60

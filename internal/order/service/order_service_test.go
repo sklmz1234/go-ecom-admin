@@ -225,3 +225,61 @@ func TestListMyOrders_ScopedByCaller(t *testing.T) {
 	assert.Equal(t, int64(1), resp.GetTotal())
 	require.Len(t, resp.GetOrders(), 1)
 }
+
+// —— CancelOrder（阶段 3b）——
+
+func TestCancelOrder_Success_RestoresStock(t *testing.T) {
+	svc, repo, products := newTestService(t)
+	repo.EXPECT().GetByID(mock.Anything, uint64(1001)).Return(&model.Order{
+		ID: 1001, UserID: 42, Status: model.StatusPending, TotalCents: 39800,
+		Items: []model.OrderItem{
+			{ProductID: 1, ProductName: "机械键盘", Quantity: 2, UnitPriceCents: 19900},
+			{ProductID: 2, ProductName: "显示器", Quantity: 1, UnitPriceCents: 199900},
+		},
+	}, nil)
+	repo.EXPECT().UpdateStatus(mock.Anything, uint64(1001), model.StatusPending, model.StatusCancelled).Return(nil)
+	// 两个 item 都要回补，且 ctx 必须带接力身份。
+	products.EXPECT().RestoreStock(mock.Anything, uint64(1), int32(2)).
+		Run(func(ctx context.Context, productID uint64, quantity int32) {
+			assert.Equal(t, "42", outgoingUserID(t, ctx))
+		}).Return(nil)
+	products.EXPECT().RestoreStock(mock.Anything, uint64(2), int32(1)).Return(nil)
+
+	resp, err := svc.CancelOrder(ctxWithUserID(42), &orderpb.CancelOrderRequest{Id: 1001})
+
+	require.NoError(t, err)
+	assert.Equal(t, orderpb.OrderStatus_ORDER_STATUS_CANCELLED, resp.GetOrder().GetStatus())
+}
+
+// 已取消的订单再取消：FailedPrecondition（409），且绝不能重复回补库存。
+func TestCancelOrder_AlreadyCancelled_409(t *testing.T) {
+	svc, repo, _ := newTestService(t)
+	repo.EXPECT().GetByID(mock.Anything, uint64(1001)).
+		Return(&model.Order{ID: 1001, UserID: 42, Status: model.StatusCancelled}, nil)
+
+	_, err := svc.CancelOrder(ctxWithUserID(42), &orderpb.CancelOrderRequest{Id: 1001})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+}
+
+// 越权取消别人的订单：404，不暴露存在性（与 GetOrder 同一语义）。
+func TestCancelOrder_OthersOrder_Returns404(t *testing.T) {
+	svc, repo, _ := newTestService(t)
+	repo.EXPECT().GetByID(mock.Anything, uint64(1001)).
+		Return(&model.Order{ID: 1001, UserID: 42, Status: model.StatusPending}, nil)
+
+	_, err := svc.CancelOrder(ctxWithUserID(7), &orderpb.CancelOrderRequest{Id: 1001})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.NotFound, status.Code(err))
+}
+
+func TestCancelOrder_Unauthenticated(t *testing.T) {
+	svc, _, _ := newTestService(t)
+
+	_, err := svc.CancelOrder(context.Background(), &orderpb.CancelOrderRequest{Id: 1001})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.Unauthenticated, status.Code(err))
+}

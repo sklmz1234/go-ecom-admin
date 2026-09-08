@@ -1,0 +1,66 @@
+# order-service（阶段 3）：与 user/product 结构完全对称（讲解范本见 20-user-service.yaml）。
+# 差异：端口 9003；不连 Redis（订单没有读缓存层——写多、按人隔离，缓存收益低）；
+# 调 product-service 的地址来自 app-config 的 GRPC_CLIENT_PRODUCT_SERVICE_ADDR。
+#
+# 2 副本是迁移锁（pkg/database.Migrate 的 GET_LOCK）的第一次实战：
+# 两个 Pod 同时启动、同时 AutoMigrate orders/order_items，
+# 数据库锁保证串行建表——apply 后可 kubectl logs 观察后到的副本在等锁。
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+  namespace: ecom
+spec:
+  selector:
+    app: order-service
+  ports:
+    - name: grpc
+      port: 9003
+      targetPort: 9003
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: ecom
+  labels:
+    app: order-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: order-service
+  template:
+    metadata:
+      labels:
+        app: order-service
+    spec:
+      containers:
+        - name: order-service
+          image: go-ecom-admin/order-service
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: { name: app-config }
+            - secretRef: { name: db-credentials }
+          ports:
+            - name: grpc
+              containerPort: 9003
+          readinessProbe:
+            grpc:
+              port: 9003
+            periodSeconds: 5
+          livenessProbe:
+            grpc:
+              port: 9003
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
+          # requests 是 HPA（optional/hpa.yaml）按 CPU 利用率扩缩容的分母，
+          # 不设 requests，metrics 算不出利用率，HPA 直接失效。
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+      terminationGracePeriodSeconds: 30
