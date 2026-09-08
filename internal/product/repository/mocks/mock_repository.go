@@ -362,6 +362,67 @@ func (_c *MockRepository_RestoreStock_Call) RunAndReturn(run func(context.Contex
 	return _c
 }
 
+// RestoreStockIdempotent provides a mock function with given fields: ctx, messageID, productID, quantity
+func (_m *MockRepository) RestoreStockIdempotent(ctx context.Context, messageID string, productID uint64, quantity int32) (*model.Product, error) {
+	ret := _m.Called(ctx, messageID, productID, quantity)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RestoreStockIdempotent")
+	}
+
+	var r0 *model.Product
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, uint64, int32) (*model.Product, error)); ok {
+		return rf(ctx, messageID, productID, quantity)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, string, uint64, int32) *model.Product); ok {
+		r0 = rf(ctx, messageID, productID, quantity)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*model.Product)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, string, uint64, int32) error); ok {
+		r1 = rf(ctx, messageID, productID, quantity)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MockRepository_RestoreStockIdempotent_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RestoreStockIdempotent'
+type MockRepository_RestoreStockIdempotent_Call struct {
+	*mock.Call
+}
+
+// RestoreStockIdempotent is a helper method to define mock.On call
+//   - ctx context.Context
+//   - messageID string
+//   - productID uint64
+//   - quantity int32
+func (_e *MockRepository_Expecter) RestoreStockIdempotent(ctx interface{}, messageID interface{}, productID interface{}, quantity interface{}) *MockRepository_RestoreStockIdempotent_Call {
+	return &MockRepository_RestoreStockIdempotent_Call{Call: _e.mock.On("RestoreStockIdempotent", ctx, messageID, productID, quantity)}
+}
+
+func (_c *MockRepository_RestoreStockIdempotent_Call) Run(run func(ctx context.Context, messageID string, productID uint64, quantity int32)) *MockRepository_RestoreStockIdempotent_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(uint64), args[3].(int32))
+	})
+	return _c
+}
+
+func (_c *MockRepository_RestoreStockIdempotent_Call) Return(_a0 *model.Product, _a1 error) *MockRepository_RestoreStockIdempotent_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MockRepository_RestoreStockIdempotent_Call) RunAndReturn(run func(context.Context, string, uint64, int32) (*model.Product, error)) *MockRepository_RestoreStockIdempotent_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Update provides a mock function with given fields: ctx, p
 func (_m *MockRepository) Update(ctx context.Context, p *model.Product) error {
 	ret := _m.Called(ctx, p)

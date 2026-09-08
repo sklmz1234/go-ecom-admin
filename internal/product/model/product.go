@@ -24,3 +24,19 @@ type Product struct {
 func (Product) TableName() string {
 	return "products"
 }
+
+// StockRestore 对应 stock_restores 表：消息驱动库存回补的去重表（阶段 4）。
+// MessageID 是主键——同一 message_id 第二次 INSERT 必撞唯一约束，
+// 冲突即"这笔回补已生效过"，直接返回成功不重复加库存。
+// 它同时是一张可审计的回补流水：哪条消息、给哪个商品、补了多少、什么时候。
+// 不设外键关联 products：商品可能被删除，但回补流水要留下来供对账。
+type StockRestore struct {
+	MessageID string    `gorm:"column:message_id;type:varchar(36);primaryKey"`
+	ProductID uint64    `gorm:"column:product_id;not null"`
+	Quantity  int32     `gorm:"column:quantity;not null"`
+	CreatedAt time.Time `gorm:"column:created_at;autoCreateTime"`
+}
+
+func (StockRestore) TableName() string {
+	return "stock_restores"
+}

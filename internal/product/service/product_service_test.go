@@ -313,3 +313,30 @@ func TestRestoreStock_Unauthenticated(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, codes.Unauthenticated, status.Code(err))
 }
+
+// 有 message_id（outbox relay 投递）时走幂等 repo 路径；系统身份
+// （user_id=0，见 identity.SystemUserID）在本方法放行——幂等正确性由
+// message_id 去重背书，身份门槛只为审计留下"这是系统动作"的痕迹。
+func TestRestoreStock_IdempotentWithSystemCaller(t *testing.T) {
+	svc, repo := newTestService(t)
+	repo.EXPECT().RestoreStockIdempotent(mock.Anything, "msg-1", uint64(1), int32(2)).
+		Return(&model.Product{ID: 1, Stock: 12}, nil)
+
+	resp, err := svc.RestoreStock(ctxWithUserID(identity.SystemUserID), &productpb.RestoreStockRequest{
+		ProductId: 1, Quantity: 2, MessageId: "msg-1",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(12), resp.GetRemainingStock())
+}
+
+// 系统身份不能通行到面向真实用户的方法：Create 仍用严格 FromIncoming，
+// user_id=0 必须被拒——系统身份不是万能钥匙。
+func TestCreateProduct_SystemCallerRejected(t *testing.T) {
+	svc, _ := newTestService(t)
+
+	_, err := svc.CreateProduct(ctxWithUserID(identity.SystemUserID), &productpb.CreateProductRequest{
+		Name: "测试", PriceCents: 100,
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.Unauthenticated, status.Code(err))
+}

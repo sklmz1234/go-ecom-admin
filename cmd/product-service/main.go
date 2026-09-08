@@ -102,7 +102,7 @@ func main() {
 		log.Fatal("attach gorm otel plugin", zap.Error(err))
 	}
 	// 带锁迁移，理由见 cmd/user-service/main.go：多副本并发建表竞态。
-	if err := database.Migrate(db, 30*time.Second, &model.Product{}); err != nil {
+	if err := database.Migrate(db, 30*time.Second, &model.Product{}, &model.StockRestore{}); err != nil {
 		log.Fatal("auto migrate failed", zap.Error(err))
 	}
 	repo := repository.NewGormRepository(db)

@@ -7,6 +7,7 @@ import (
 	"go.uber.org/zap"
 
 	apperrors "go-ecom-admin/pkg/errors"
+	"go-ecom-admin/pkg/identity"
 
 	"go-ecom-admin/internal/product/model"
 	"go-ecom-admin/internal/product/repository"
@@ -171,8 +172,15 @@ func (s *Service) DeductStock(ctx context.Context, req *productpb.DeductStockReq
 	}, nil
 }
 
+// RestoreStock（阶段 4 起）按 message_id 分两种形态，契约见 proto 注释：
+//   - 无 message_id：CreateOrder 失败时的同步补偿，老语义（不幂等，
+//     调用方保证"一次 Deduct 最多一次 Restore"）。
+//   - 有 message_id：outbox relay 的至少一次投递，走去重表幂等路径，
+//     重复投递只生效一次。relay 是后台进程没有真实用户，用系统身份
+//     （user_id=0）调用，所以这里用 FromIncomingAllowSystem——
+//     本服务唯一放行系统身份的方法，幂正确性由 message_id 去重背书。
 func (s *Service) RestoreStock(ctx context.Context, req *productpb.RestoreStockRequest) (*productpb.RestoreStockResponse, error) {
-	callerID, err := userIDFromContext(ctx)
+	callerID, err := identity.FromIncomingAllowSystem(ctx)
 	if err != nil {
 		return nil, apperrors.ToGRPCStatus(err)
 	}
@@ -181,11 +189,17 @@ func (s *Service) RestoreStock(ctx context.Context, req *productpb.RestoreStockR
 		return nil, apperrors.ToGRPCStatus(apperrors.InvalidArgument("product_id is required and quantity must be positive", nil))
 	}
 
-	p, err := s.repo.RestoreStock(ctx, req.GetProductId(), req.GetQuantity())
+	var p *model.Product
+	if messageID := req.GetMessageId(); messageID != "" {
+		p, err = s.repo.RestoreStockIdempotent(ctx, messageID, req.GetProductId(), req.GetQuantity())
+	} else {
+		p, err = s.repo.RestoreStock(ctx, req.GetProductId(), req.GetQuantity())
+	}
 	if err != nil {
 		s.log.Warn("restore stock failed",
 			zap.Uint64("product_id", req.GetProductId()),
 			zap.Int32("quantity", req.GetQuantity()),
+			zap.String("message_id", req.GetMessageId()),
 			zap.Uint64("caller_id", callerID),
 			zap.Error(err),
 		)
@@ -196,6 +210,7 @@ func (s *Service) RestoreStock(ctx context.Context, req *productpb.RestoreStockR
 		zap.Uint64("product_id", p.ID),
 		zap.Int32("quantity", req.GetQuantity()),
 		zap.Int32("remaining", p.Stock),
+		zap.String("message_id", req.GetMessageId()),
 		zap.Uint64("caller_id", callerID),
 	)
 	return &productpb.RestoreStockResponse{RemainingStock: p.Stock}, nil
