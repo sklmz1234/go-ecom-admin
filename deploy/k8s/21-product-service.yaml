@@ -32,7 +32,7 @@ spec:
     spec:
       containers:
         - name: product-service
-          image: go-ecom-admin/product-service
+          image: go-ecom-admin/product-service:TAG
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef: { name: app-config }

@@ -51,7 +51,7 @@ services:
       context: .
       args:
         SERVICE: user-service
-    image: go-ecom-admin/user-service
+    image: go-ecom-admin/user-service:${TAG:-latest}
     environment:
       <<: *mysql-env
       JWT_SECRET: ${JWT_SECRET:-dev-only-change-me-in-production}
@@ -67,7 +67,7 @@ services:
       context: .
       args:
         SERVICE: product-service
-    image: go-ecom-admin/product-service
+    image: go-ecom-admin/product-service:${TAG:-latest}
     environment:
       <<: *mysql-env
       # 缓存地址，覆盖 config.yaml 里的 127.0.0.1:6379
@@ -89,7 +89,7 @@ services:
       context: .
       args:
         SERVICE: order-service
-    image: go-ecom-admin/order-service
+    image: go-ecom-admin/order-service:${TAG:-latest}
     environment:
       <<: *mysql-env
       # order-service 是 gRPC 客户端（调 product-service 扣库存），
@@ -109,7 +109,7 @@ services:
       context: .
       args:
         SERVICE: api-gateway
-    image: go-ecom-admin/api-gateway
+    image: go-ecom-admin/api-gateway:${TAG:-latest}
     environment:
       # 容器网络内用 service 名寻址，替代 yaml 里的 127.0.0.1
       GRPC_CLIENT_USER_SERVICE_ADDR: user-service:9001
@@ -132,7 +132,7 @@ services:
       context: .
       args:
         SERVICE: seed
-    image: go-ecom-admin/seed
+    image: go-ecom-admin/seed:${TAG:-latest}
     profiles: ["tools"]
     environment:
       <<: *mysql-env

@@ -37,7 +37,7 @@ spec:
     spec:
       containers:
         - name: order-service
-          image: go-ecom-admin/order-service
+          image: go-ecom-admin/order-service:TAG
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef: { name: app-config }

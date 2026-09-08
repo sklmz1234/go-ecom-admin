@@ -32,8 +32,10 @@ spec:
     spec:
       containers:
         - name: user-service
-          image: go-ecom-admin/user-service
-          # 镜像没打版本 tag（默认 latest），K8s 对 latest 默认 Always 拉取。
+          image: go-ecom-admin/user-service:TAG
+          # :TAG 是占位符，make k8s-apply 时用 sed 替换成当前 commit 短哈希
+          # （阶段 4 修复：:latest + IfNotPresent 重建后 rollout 会拿旧镜像，
+          # 唯一 tag 让"镜像名不同"本身就触发滚动更新）。
           # 本地 kind 集群镜像就在本机（containerd 镜像存储），
           # 显式 IfNotPresent 才能直接用，不去 registry 拉一个不存在的仓库。
           imagePullPolicy: IfNotPresent
