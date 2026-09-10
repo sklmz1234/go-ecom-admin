@@ -302,6 +302,65 @@ func (_c *MockRepository_List_Call) RunAndReturn(run func(context.Context, int, 
 	return _c
 }
 
+// ListByIDs provides a mock function with given fields: ctx, ids
+func (_m *MockRepository) ListByIDs(ctx context.Context, ids []uint64) ([]*model.Product, error) {
+	ret := _m.Called(ctx, ids)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListByIDs")
+	}
+
+	var r0 []*model.Product
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, []uint64) ([]*model.Product, error)); ok {
+		return rf(ctx, ids)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, []uint64) []*model.Product); ok {
+		r0 = rf(ctx, ids)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]*model.Product)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, []uint64) error); ok {
+		r1 = rf(ctx, ids)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MockRepository_ListByIDs_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListByIDs'
+type MockRepository_ListByIDs_Call struct {
+	*mock.Call
+}
+
+// ListByIDs is a helper method to define mock.On call
+//   - ctx context.Context
+//   - ids []uint64
+func (_e *MockRepository_Expecter) ListByIDs(ctx interface{}, ids interface{}) *MockRepository_ListByIDs_Call {
+	return &MockRepository_ListByIDs_Call{Call: _e.mock.On("ListByIDs", ctx, ids)}
+}
+
+func (_c *MockRepository_ListByIDs_Call) Run(run func(ctx context.Context, ids []uint64)) *MockRepository_ListByIDs_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].([]uint64))
+	})
+	return _c
+}
+
+func (_c *MockRepository_ListByIDs_Call) Return(_a0 []*model.Product, _a1 error) *MockRepository_ListByIDs_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MockRepository_ListByIDs_Call) RunAndReturn(run func(context.Context, []uint64) ([]*model.Product, error)) *MockRepository_ListByIDs_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // RestoreStock provides a mock function with given fields: ctx, productID, quantity
 func (_m *MockRepository) RestoreStock(ctx context.Context, productID uint64, quantity int32) (*model.Product, error) {
 	ret := _m.Called(ctx, productID, quantity)
@@ -419,6 +478,74 @@ func (_c *MockRepository_RestoreStockIdempotent_Call) Return(_a0 *model.Product,
 }
 
 func (_c *MockRepository_RestoreStockIdempotent_Call) RunAndReturn(run func(context.Context, string, uint64, int32) (*model.Product, error)) *MockRepository_RestoreStockIdempotent_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SearchByKeyword provides a mock function with given fields: ctx, keyword, page, pageSize
+func (_m *MockRepository) SearchByKeyword(ctx context.Context, keyword string, page int, pageSize int) ([]*model.Product, int64, error) {
+	ret := _m.Called(ctx, keyword, page, pageSize)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SearchByKeyword")
+	}
+
+	var r0 []*model.Product
+	var r1 int64
+	var r2 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, int, int) ([]*model.Product, int64, error)); ok {
+		return rf(ctx, keyword, page, pageSize)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, string, int, int) []*model.Product); ok {
+		r0 = rf(ctx, keyword, page, pageSize)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]*model.Product)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, string, int, int) int64); ok {
+		r1 = rf(ctx, keyword, page, pageSize)
+	} else {
+		r1 = ret.Get(1).(int64)
+	}
+
+	if rf, ok := ret.Get(2).(func(context.Context, string, int, int) error); ok {
+		r2 = rf(ctx, keyword, page, pageSize)
+	} else {
+		r2 = ret.Error(2)
+	}
+
+	return r0, r1, r2
+}
+
+// MockRepository_SearchByKeyword_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SearchByKeyword'
+type MockRepository_SearchByKeyword_Call struct {
+	*mock.Call
+}
+
+// SearchByKeyword is a helper method to define mock.On call
+//   - ctx context.Context
+//   - keyword string
+//   - page int
+//   - pageSize int
+func (_e *MockRepository_Expecter) SearchByKeyword(ctx interface{}, keyword interface{}, page interface{}, pageSize interface{}) *MockRepository_SearchByKeyword_Call {
+	return &MockRepository_SearchByKeyword_Call{Call: _e.mock.On("SearchByKeyword", ctx, keyword, page, pageSize)}
+}
+
+func (_c *MockRepository_SearchByKeyword_Call) Run(run func(ctx context.Context, keyword string, page int, pageSize int)) *MockRepository_SearchByKeyword_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(int), args[3].(int))
+	})
+	return _c
+}
+
+func (_c *MockRepository_SearchByKeyword_Call) Return(_a0 []*model.Product, _a1 int64, _a2 error) *MockRepository_SearchByKeyword_Call {
+	_c.Call.Return(_a0, _a1, _a2)
+	return _c
+}
+
+func (_c *MockRepository_SearchByKeyword_Call) RunAndReturn(run func(context.Context, string, int, int) ([]*model.Product, int64, error)) *MockRepository_SearchByKeyword_Call {
 	_c.Call.Return(run)
 	return _c
 }

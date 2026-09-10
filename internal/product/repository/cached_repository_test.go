@@ -46,6 +46,14 @@ func (f *countingRepo) List(ctx context.Context, page, pageSize int) ([]*model.P
 	return nil, 0, nil
 }
 
+func (f *countingRepo) SearchByKeyword(ctx context.Context, keyword string, page, pageSize int) ([]*model.Product, int64, error) {
+	return nil, 0, nil
+}
+
+func (f *countingRepo) ListByIDs(ctx context.Context, ids []uint64) ([]*model.Product, error) {
+	return nil, nil
+}
+
 func (f *countingRepo) DeductStock(ctx context.Context, productID uint64, quantity int32) (*model.Product, error) {
 	if f.product == nil {
 		return nil, apperrors.NotFound("product not found", nil)
