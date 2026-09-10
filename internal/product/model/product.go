@@ -17,6 +17,11 @@ type Product struct {
 	// 存量数据迁移后为 0，语义是"无主"：任何人都不能改/删（不存在 uid=0 的用户），
 	// 本地开发直接重跑 seed 即可拿到带归属的数据。
 	OwnerID    uint64    `gorm:"column:owner_id;not null;default:0;index"`
+	// 阶段 5A：C 端商城展示字段。ImageURL 存外链（不本地托管图片，零基建起步），
+	// 空串=无图，前端兜底占位图。Description 给 1024 而不是 TEXT：
+	// 列表页摘要和详情页展示都用它，电商详情富文本是以后独立字段/独立服务的事。
+	Description string    `gorm:"column:description;type:varchar(1024);not null;default:''"`
+	ImageURL    string    `gorm:"column:image_url;type:varchar(512);not null;default:''"`
 	CreatedAt  time.Time `gorm:"column:created_at;autoCreateTime"`
 	UpdatedAt  time.Time `gorm:"column:updated_at;autoUpdateTime"`
 }

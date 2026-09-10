@@ -62,6 +62,10 @@ func (r *gormRepository) Update(ctx context.Context, p *model.Product) error {
 		"name":        p.Name,
 		"price_cents": p.PriceCents,
 		"stock":       p.Stock,
+		// 阶段 5A：整体替换语义必须覆盖全部可写字段，否则前端改图/描述会静默不生效。
+		// owner_id 依然不在其中——归属不可转让。
+		"description": p.Description,
+		"image_url":   p.ImageURL,
 	})
 	if result.Error != nil {
 		return apperrors.Internal("failed to update product", result.Error)
