@@ -110,10 +110,14 @@ func (x *GetProductResponse) GetProduct() *Product {
 }
 
 type CreateProductRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	PriceCents    int64                  `protobuf:"varint,2,opt,name=price_cents,json=priceCents,proto3" json:"price_cents,omitempty"` // 价格用最小货币单位（分）存储和传输，避免浮点数误差
-	Stock         int32                  `protobuf:"varint,3,opt,name=stock,proto3" json:"stock,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Name       string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	PriceCents int64                  `protobuf:"varint,2,opt,name=price_cents,json=priceCents,proto3" json:"price_cents,omitempty"` // 价格用最小货币单位（分）存储和传输，避免浮点数误差
+	Stock      int32                  `protobuf:"varint,3,opt,name=stock,proto3" json:"stock,omitempty"`
+	// 阶段 5A：C 端商城需要图文展示，创建入口（管理台/seed）必须能写入，
+	// 否则新商品永远没有图和描述。可选字段，空串=无图无描述。
+	Description   string `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
+	ImageUrl      string `protobuf:"bytes,5,opt,name=image_url,json=imageUrl,proto3" json:"image_url,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -169,6 +173,20 @@ func (x *CreateProductRequest) GetStock() int32 {
 	return 0
 }
 
+func (x *CreateProductRequest) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *CreateProductRequest) GetImageUrl() string {
+	if x != nil {
+		return x.ImageUrl
+	}
+	return ""
+}
+
 type CreateProductResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Product       *Product               `protobuf:"bytes,1,opt,name=product,proto3" json:"product,omitempty"`
@@ -217,11 +235,15 @@ func (x *CreateProductResponse) GetProduct() *Product {
 // 阶段 2 的商品字段少，局部更新（哪些字段传了才更新）带来的复杂度不值得，
 // 客户端每次都传完整字段更简单、更不容易出现"忘记传导致字段被静默清空"的问题。
 type UpdateProductRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	PriceCents    int64                  `protobuf:"varint,3,opt,name=price_cents,json=priceCents,proto3" json:"price_cents,omitempty"`
-	Stock         int32                  `protobuf:"varint,4,opt,name=stock,proto3" json:"stock,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Id         uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name       string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	PriceCents int64                  `protobuf:"varint,3,opt,name=price_cents,json=priceCents,proto3" json:"price_cents,omitempty"`
+	Stock      int32                  `protobuf:"varint,4,opt,name=stock,proto3" json:"stock,omitempty"`
+	// 同 CreateProductRequest：整体替换语义下这两个字段也必须传全，
+	// 不传会被空串覆盖（这正是 proto 注释里"整体替换"的含义）。
+	Description   string `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`
+	ImageUrl      string `protobuf:"bytes,6,opt,name=image_url,json=imageUrl,proto3" json:"image_url,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -282,6 +304,20 @@ func (x *UpdateProductRequest) GetStock() int32 {
 		return x.Stock
 	}
 	return 0
+}
+
+func (x *UpdateProductRequest) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *UpdateProductRequest) GetImageUrl() string {
+	if x != nil {
+		return x.ImageUrl
+	}
+	return ""
 }
 
 type UpdateProductResponse struct {
@@ -410,9 +446,12 @@ func (*DeleteProductResponse) Descriptor() ([]byte, []int) {
 }
 
 type ListProductsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Page          int32                  `protobuf:"varint,1,opt,name=page,proto3" json:"page,omitempty"`
-	PageSize      int32                  `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Page     int32                  `protobuf:"varint,1,opt,name=page,proto3" json:"page,omitempty"`
+	PageSize int32                  `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// 阶段 5A：搜索关键词。空串=普通分页列表（走 MySQL offset/limit）；
+	// 非空=搜索（走 Elasticsearch 召回 + MySQL 回表，实现细节对调用方透明）。
+	Keyword       string `protobuf:"bytes,3,opt,name=keyword,proto3" json:"keyword,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -459,6 +498,13 @@ func (x *ListProductsRequest) GetPageSize() int32 {
 		return x.PageSize
 	}
 	return 0
+}
+
+func (x *ListProductsRequest) GetKeyword() string {
+	if x != nil {
+		return x.Keyword
+	}
+	return ""
 }
 
 type ListProductsResponse struct {
@@ -767,7 +813,11 @@ type Product struct {
 	// user_id 写入——客户端传不了也改不了它。归属校验（Update/Delete 只能
 	// 操作自己的商品）依据就是这个字段，所以它必须出现在响应里，前端
 	// 才能知道"这个商品是不是我的、要不要显示编辑按钮"。
-	OwnerId       uint64 `protobuf:"varint,6,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
+	OwnerId uint64 `protobuf:"varint,6,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
+	// 阶段 5A：C 端商城展示字段。image_url 是外链（picsum 等占位图服务），
+	// 不做本地图片托管——学习项目零基建起步，对象存储留待后期。
+	Description   string `protobuf:"bytes,7,opt,name=description,proto3" json:"description,omitempty"`
+	ImageUrl      string `protobuf:"bytes,8,opt,name=image_url,json=imageUrl,proto3" json:"image_url,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -844,6 +894,20 @@ func (x *Product) GetOwnerId() uint64 {
 	return 0
 }
 
+func (x *Product) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *Product) GetImageUrl() string {
+	if x != nil {
+		return x.ImageUrl
+	}
+	return ""
+}
+
 var File_proto_product_product_proto protoreflect.FileDescriptor
 
 const file_proto_product_product_proto_rawDesc = "" +
@@ -852,28 +916,33 @@ const file_proto_product_product_proto_rawDesc = "" +
 	"\x11GetProductRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\"@\n" +
 	"\x12GetProductResponse\x12*\n" +
-	"\aproduct\x18\x01 \x01(\v2\x10.product.ProductR\aproduct\"a\n" +
+	"\aproduct\x18\x01 \x01(\v2\x10.product.ProductR\aproduct\"\xa0\x01\n" +
 	"\x14CreateProductRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
 	"\vprice_cents\x18\x02 \x01(\x03R\n" +
 	"priceCents\x12\x14\n" +
-	"\x05stock\x18\x03 \x01(\x05R\x05stock\"C\n" +
+	"\x05stock\x18\x03 \x01(\x05R\x05stock\x12 \n" +
+	"\vdescription\x18\x04 \x01(\tR\vdescription\x12\x1b\n" +
+	"\timage_url\x18\x05 \x01(\tR\bimageUrl\"C\n" +
 	"\x15CreateProductResponse\x12*\n" +
-	"\aproduct\x18\x01 \x01(\v2\x10.product.ProductR\aproduct\"q\n" +
+	"\aproduct\x18\x01 \x01(\v2\x10.product.ProductR\aproduct\"\xb0\x01\n" +
 	"\x14UpdateProductRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1f\n" +
 	"\vprice_cents\x18\x03 \x01(\x03R\n" +
 	"priceCents\x12\x14\n" +
-	"\x05stock\x18\x04 \x01(\x05R\x05stock\"C\n" +
+	"\x05stock\x18\x04 \x01(\x05R\x05stock\x12 \n" +
+	"\vdescription\x18\x05 \x01(\tR\vdescription\x12\x1b\n" +
+	"\timage_url\x18\x06 \x01(\tR\bimageUrl\"C\n" +
 	"\x15UpdateProductResponse\x12*\n" +
 	"\aproduct\x18\x01 \x01(\v2\x10.product.ProductR\aproduct\"&\n" +
 	"\x14DeleteProductRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\"\x17\n" +
-	"\x15DeleteProductResponse\"F\n" +
+	"\x15DeleteProductResponse\"`\n" +
 	"\x13ListProductsRequest\x12\x12\n" +
 	"\x04page\x18\x01 \x01(\x05R\x04page\x12\x1b\n" +
-	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\"Z\n" +
+	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x18\n" +
+	"\akeyword\x18\x03 \x01(\tR\akeyword\"Z\n" +
 	"\x14ListProductsResponse\x12,\n" +
 	"\bproducts\x18\x01 \x03(\v2\x10.product.ProductR\bproducts\x12\x14\n" +
 	"\x05total\x18\x02 \x01(\x03R\x05total\"O\n" +
@@ -893,7 +962,7 @@ const file_proto_product_product_proto_rawDesc = "" +
 	"\n" +
 	"message_id\x18\x03 \x01(\tR\tmessageId\"?\n" +
 	"\x14RestoreStockResponse\x12'\n" +
-	"\x0fremaining_stock\x18\x01 \x01(\x05R\x0eremainingStock\"\x9e\x01\n" +
+	"\x0fremaining_stock\x18\x01 \x01(\x05R\x0eremainingStock\"\xdd\x01\n" +
 	"\aProduct\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1f\n" +
@@ -902,7 +971,9 @@ const file_proto_product_product_proto_rawDesc = "" +
 	"\x05stock\x18\x04 \x01(\x05R\x05stock\x12\x1d\n" +
 	"\n" +
 	"created_at\x18\x05 \x01(\x03R\tcreatedAt\x12\x19\n" +
-	"\bowner_id\x18\x06 \x01(\x04R\aownerId2\xab\x04\n" +
+	"\bowner_id\x18\x06 \x01(\x04R\aownerId\x12 \n" +
+	"\vdescription\x18\a \x01(\tR\vdescription\x12\x1b\n" +
+	"\timage_url\x18\b \x01(\tR\bimageUrl2\xab\x04\n" +
 	"\x0eProductService\x12E\n" +
 	"\n" +
 	"GetProduct\x12\x1a.product.GetProductRequest\x1a\x1b.product.GetProductResponse\x12N\n" +
