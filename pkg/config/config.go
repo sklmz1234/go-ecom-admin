@@ -17,14 +17,15 @@ import (
 
 // Config 是整个应用的配置根节点，字段与 configs/config.yaml 的顶层 key 一一对应。
 type Config struct {
-	App        AppConfig        `mapstructure:"app"`
-	Log        LogConfig        `mapstructure:"log"`
-	MySQL      MySQLConfig      `mapstructure:"mysql"`
-	Redis      RedisConfig      `mapstructure:"redis"`
-	JWT        JWTConfig        `mapstructure:"jwt"`
-	Server     ServerConfig     `mapstructure:"server"`
-	GRPCClient GRPCClientConfig `mapstructure:"grpc_client"`
-	Telemetry  TelemetryConfig  `mapstructure:"telemetry"`
+	App           AppConfig           `mapstructure:"app"`
+	Log           LogConfig           `mapstructure:"log"`
+	MySQL         MySQLConfig         `mapstructure:"mysql"`
+	Redis         RedisConfig         `mapstructure:"redis"`
+	Elasticsearch ElasticsearchConfig `mapstructure:"elasticsearch"`
+	JWT           JWTConfig           `mapstructure:"jwt"`
+	Server        ServerConfig        `mapstructure:"server"`
+	GRPCClient    GRPCClientConfig    `mapstructure:"grpc_client"`
+	Telemetry     TelemetryConfig     `mapstructure:"telemetry"`
 }
 
 type AppConfig struct {
@@ -65,6 +66,15 @@ type RedisConfig struct {
 	Addr     string `mapstructure:"addr"`
 	Password string `mapstructure:"password"`
 	DB       int    `mapstructure:"db"`
+}
+
+// ElasticsearchConfig 是 product-service 商品搜索（阶段 5A）的连接配置。
+// Addr 带 scheme（http://...），因为 go-elasticsearch 的 Addresses 吃完整 URL；
+// Index 独立成配置而不是写死常量，方便测试环境用另一个索引名互相隔离。
+// 环境变量覆盖：ELASTICSEARCH_ADDR / ELASTICSEARCH_INDEX。
+type ElasticsearchConfig struct {
+	Addr  string `mapstructure:"addr"`
+	Index string `mapstructure:"index"`
 }
 
 // JWTConfig 是 user-service（签发）和 api-gateway（校验）共用的一份配置——
