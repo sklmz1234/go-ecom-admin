@@ -30,6 +30,10 @@ message CreateProductRequest {
   string name = 1;
   int64 price_cents = 2; // 价格用最小货币单位（分）存储和传输，避免浮点数误差
   int32 stock = 3;
+  // 阶段 5A：C 端商城需要图文展示，创建入口（管理台/seed）必须能写入，
+  // 否则新商品永远没有图和描述。可选字段，空串=无图无描述。
+  string description = 4;
+  string image_url = 5;
 }
 
 message CreateProductResponse {
@@ -44,6 +48,10 @@ message UpdateProductRequest {
   string name = 2;
   int64 price_cents = 3;
   int32 stock = 4;
+  // 同 CreateProductRequest：整体替换语义下这两个字段也必须传全，
+  // 不传会被空串覆盖（这正是 proto 注释里"整体替换"的含义）。
+  string description = 5;
+  string image_url = 6;
 }
 
 message UpdateProductResponse {
@@ -60,6 +68,9 @@ message DeleteProductResponse {}
 message ListProductsRequest {
   int32 page = 1;
   int32 page_size = 2;
+  // 阶段 5A：搜索关键词。空串=普通分页列表（走 MySQL offset/limit）；
+  // 非空=搜索（走 Elasticsearch 召回 + MySQL 回表，实现细节对调用方透明）。
+  string keyword = 3;
 }
 
 message ListProductsResponse {
@@ -126,4 +137,8 @@ message Product {
   // 操作自己的商品）依据就是这个字段，所以它必须出现在响应里，前端
   // 才能知道"这个商品是不是我的、要不要显示编辑按钮"。
   uint64 owner_id = 6;
+  // 阶段 5A：C 端商城展示字段。image_url 是外链（picsum 等占位图服务），
+  // 不做本地图片托管——学习项目零基建起步，对象存储留待后期。
+  string description = 7;
+  string image_url = 8;
 }

@@ -12,10 +12,18 @@ K8S_DIR := deploy/k8s
 # 一定用新构建的那份）。可用 make k8s-build TAG=my-feature 显式覆盖。
 TAG ?= $(shell git rev-parse --short HEAD)
 
-.PHONY: help up down restart logs ps build seed clean k8s-build k8s-apply k8s-delete k8s-seed k8s-status k8s-rollout
+.PHONY: help up down restart logs ps build seed clean k8s-build k8s-apply k8s-delete k8s-seed k8s-status k8s-rollout proto
 
 help: ## 显示本帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-10s %s\n", $$1, $$2}'
+
+proto: ## 重新生成 pb（插件版本须与 pb.go 头注释一致：protoc v6.33.x / protoc-gen-go v1.36.x）
+	# paths=source_relative 让生成文件落回 proto/<svc>/ 原位置，而不是按 go_package
+	# 再嵌套一层 go-ecom-admin/ 目录。三个 proto 一次全生成，避免漏改某个后
+	# pb 与 .proto 漂移。
+	protoc --go_out=. --go_opt=paths=source_relative \
+	  --go-grpc_out=. --go-grpc_opt=paths=source_relative \
+	  proto/product/product.proto proto/user/user.proto proto/order/order.proto
 
 up: ## 构建镜像并后台启动整套环境
 	$(COMPOSE) up -d --build
