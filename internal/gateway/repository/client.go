@@ -141,13 +141,14 @@ func (c *ProductClient) GetProduct(ctx context.Context, id uint64) (*productpb.P
 	return resp.GetProduct(), nil
 }
 
-func (c *ProductClient) CreateProduct(ctx context.Context, name string, priceCents int64, stock int32) (*productpb.Product, error) {
+func (c *ProductClient) CreateProduct(ctx context.Context, name string, priceCents int64, stock int32, description, imageURL string) (*productpb.Product, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
 	defer cancel()
 
 	resp, err := callWithBreaker(c.breaker, func() (*productpb.CreateProductResponse, error) {
 		return c.client.CreateProduct(ctx, &productpb.CreateProductRequest{
 			Name: name, PriceCents: priceCents, Stock: stock,
+			Description: description, ImageUrl: imageURL,
 		})
 	})
 	if err != nil {
@@ -156,13 +157,14 @@ func (c *ProductClient) CreateProduct(ctx context.Context, name string, priceCen
 	return resp.GetProduct(), nil
 }
 
-func (c *ProductClient) UpdateProduct(ctx context.Context, id uint64, name string, priceCents int64, stock int32) (*productpb.Product, error) {
+func (c *ProductClient) UpdateProduct(ctx context.Context, id uint64, name string, priceCents int64, stock int32, description, imageURL string) (*productpb.Product, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
 	defer cancel()
 
 	resp, err := callWithBreaker(c.breaker, func() (*productpb.UpdateProductResponse, error) {
 		return c.client.UpdateProduct(ctx, &productpb.UpdateProductRequest{
 			Id: id, Name: name, PriceCents: priceCents, Stock: stock,
+			Description: description, ImageUrl: imageURL,
 		})
 	})
 	if err != nil {
@@ -187,12 +189,12 @@ type listProductsResult struct {
 	total    int64
 }
 
-func (c *ProductClient) ListProducts(ctx context.Context, page, pageSize int32) ([]*productpb.Product, int64, error) {
+func (c *ProductClient) ListProducts(ctx context.Context, page, pageSize int32, keyword string) ([]*productpb.Product, int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultCallTimeout)
 	defer cancel()
 
 	res, err := callWithBreaker(c.breaker, func() (listProductsResult, error) {
-		resp, err := c.client.ListProducts(ctx, &productpb.ListProductsRequest{Page: page, PageSize: pageSize})
+		resp, err := c.client.ListProducts(ctx, &productpb.ListProductsRequest{Page: page, PageSize: pageSize, Keyword: keyword})
 		if err != nil {
 			return listProductsResult{}, err
 		}

@@ -48,10 +48,12 @@ func (s *Service) CreateProduct(ctx context.Context, req *productpb.CreateProduc
 	}
 
 	p := &model.Product{
-		Name:       req.GetName(),
-		PriceCents: req.GetPriceCents(),
-		Stock:      req.GetStock(),
-		OwnerID:    ownerID,
+		Name:        req.GetName(),
+		PriceCents:  req.GetPriceCents(),
+		Stock:       req.GetStock(),
+		OwnerID:     ownerID,
+		Description: req.GetDescription(),
+		ImageURL:    req.GetImageUrl(),
 	}
 	if err := s.repo.Create(ctx, p); err != nil {
 		s.log.Warn("create product failed", zap.String("name", req.GetName()), zap.Error(err))
@@ -99,10 +101,12 @@ func (s *Service) UpdateProduct(ctx context.Context, req *productpb.UpdateProduc
 	}
 
 	p := &model.Product{
-		ID:         req.GetId(),
-		Name:       req.GetName(),
-		PriceCents: req.GetPriceCents(),
-		Stock:      req.GetStock(),
+		ID:          req.GetId(),
+		Name:        req.GetName(),
+		PriceCents:  req.GetPriceCents(),
+		Stock:       req.GetStock(),
+		Description: req.GetDescription(),
+		ImageURL:    req.GetImageUrl(),
 	}
 	if err := s.repo.Update(ctx, p); err != nil {
 		s.log.Warn("update product failed", zap.Uint64("id", req.GetId()), zap.Error(err))
@@ -238,11 +242,13 @@ func (s *Service) checkOwnership(ctx context.Context, productID, ownerID uint64)
 
 func toProto(p *model.Product) *productpb.Product {
 	return &productpb.Product{
-		Id:         p.ID,
-		Name:       p.Name,
-		PriceCents: p.PriceCents,
-		Stock:      p.Stock,
-		OwnerId:    p.OwnerID,
-		CreatedAt:  p.CreatedAt.Unix(),
+		Id:          p.ID,
+		Name:        p.Name,
+		PriceCents:  p.PriceCents,
+		Stock:       p.Stock,
+		OwnerId:     p.OwnerID,
+		CreatedAt:   p.CreatedAt.Unix(),
+		Description: p.Description,
+		ImageUrl:    p.ImageURL,
 	}
 }

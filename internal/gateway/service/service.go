@@ -66,7 +66,7 @@ func (s *Service) CreateProduct(ctx context.Context, userID uint64, req model.Cr
 	// 元 -> 分：四舍五入到分，避免浮点数直接乘出现的精度误差被带进下游服务。
 	priceCents := int64(req.PriceYuan*100 + 0.5)
 
-	p, err := s.productClient.CreateProduct(identity.InjectOutgoing(ctx, userID), req.Name, priceCents, req.Stock)
+	p, err := s.productClient.CreateProduct(identity.InjectOutgoing(ctx, userID), req.Name, priceCents, req.Stock, req.Description, req.ImageURL)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +76,7 @@ func (s *Service) CreateProduct(ctx context.Context, userID uint64, req model.Cr
 func (s *Service) UpdateProduct(ctx context.Context, userID, id uint64, req model.UpdateProductRequest) (*model.ProductDTO, error) {
 	priceCents := int64(req.PriceYuan*100 + 0.5)
 
-	p, err := s.productClient.UpdateProduct(identity.InjectOutgoing(ctx, userID), id, req.Name, priceCents, req.Stock)
+	p, err := s.productClient.UpdateProduct(identity.InjectOutgoing(ctx, userID), id, req.Name, priceCents, req.Stock, req.Description, req.ImageURL)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +88,7 @@ func (s *Service) DeleteProduct(ctx context.Context, userID, id uint64) error {
 }
 
 func (s *Service) ListProducts(ctx context.Context, req model.ListProductsRequest) (*model.ListProductsResponse, error) {
-	products, total, err := s.productClient.ListProducts(ctx, int32(req.Page), int32(req.PageSize))
+	products, total, err := s.productClient.ListProducts(ctx, int32(req.Page), int32(req.PageSize), req.Keyword)
 	if err != nil {
 		return nil, err
 	}
@@ -156,12 +156,14 @@ func userToDTO(u *userpb.User) *model.UserDTO {
 
 func productToDTO(p *productpb.Product) *model.ProductDTO {
 	return &model.ProductDTO{
-		ID:        p.GetId(),
-		Name:      p.GetName(),
-		PriceYuan: float64(p.GetPriceCents()) / 100,
-		Stock:     p.GetStock(),
-		OwnerID:   p.GetOwnerId(),
-		CreatedAt: p.GetCreatedAt(),
+		ID:          p.GetId(),
+		Name:        p.GetName(),
+		PriceYuan:   float64(p.GetPriceCents()) / 100,
+		Stock:       p.GetStock(),
+		OwnerID:     p.GetOwnerId(),
+		Description: p.GetDescription(),
+		ImageURL:    p.GetImageUrl(),
+		CreatedAt:   p.GetCreatedAt(),
 	}
 }
 

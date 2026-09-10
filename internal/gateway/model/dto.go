@@ -47,6 +47,9 @@ type ProductDTO struct {
 	// 从而决定要不要渲染编辑/删除按钮。注意这只是展示层的便利——真正的
 	// 权限裁决永远在 product-service 内部，前端藏按钮挡不住构造请求的人。
 	OwnerID   uint64  `json:"owner_id"`
+	// 阶段 5A：C 端商城展示字段。image_url 是外链，空串时前端兜底占位图。
+	Description string  `json:"description"`
+	ImageURL    string  `json:"image_url"`
 	CreatedAt int64   `json:"created_at"`
 }
 
@@ -54,6 +57,11 @@ type CreateProductRequest struct {
 	Name      string  `json:"name" binding:"required"`
 	PriceYuan float64 `json:"price_yuan" binding:"required,gt=0"`
 	Stock     int32   `json:"stock"`
+	// 图和描述可选（omitempty）：C 端数据入口除了管理台还有 seed，
+	// 不强制每个商品都有图。max 与 DB 列宽（varchar 1024/512）对齐，
+	// 在网关就拦掉超长输入，比打到 product-service 再失败便宜。
+	Description string `json:"description" binding:"omitempty,max=1024"`
+	ImageURL    string `json:"image_url" binding:"omitempty,max=512"`
 }
 
 // UpdateProductRequest 和 CreateProductRequest 字段一样，但故意不复用
@@ -64,11 +72,17 @@ type UpdateProductRequest struct {
 	Name      string  `json:"name" binding:"required"`
 	PriceYuan float64 `json:"price_yuan" binding:"required,gt=0"`
 	Stock     int32   `json:"stock"`
+	// 同 CreateProductRequest：整体替换语义下必须传全，不传会被空串覆盖。
+	Description string `json:"description" binding:"omitempty,max=1024"`
+	ImageURL    string `json:"image_url" binding:"omitempty,max=512"`
 }
 
 type ListProductsRequest struct {
 	Page     int `form:"page,default=1"`
 	PageSize int `form:"page_size,default=20"`
+	// 阶段 5A：搜索关键词，空串=普通分页列表。product-service 内部分流
+	// （关键词走 ES 召回，空走 MySQL 列表），网关只透传不感知。
+	Keyword string `form:"keyword"`
 }
 
 type ListProductsResponse struct {
