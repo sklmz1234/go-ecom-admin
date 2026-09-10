@@ -24,6 +24,12 @@ import (
 // gRPC metadata key 不区分大小写但统一规范成这种形式）。
 const MetadataKeyUserID = "user_id"
 
+// SystemUserID 是系统内部调用的身份约定值（阶段 4 outbox relay 引入）。
+// users 表自增从 1 开始，0 永远不是真实用户，所以拿它当"这不是人，
+// 是系统进程"的标记不会和真实身份撞车；审计日志里 caller_id=0 即
+// "系统内部动作"（如取消订单后的异步库存回补）。
+const SystemUserID = 0
+
 // InjectOutgoing 把"当前登录用户是谁"附加到 outgoing context 上，随 gRPC
 // 调用一起传给下游服务。两个使用场景：
 //   - 网关验完 JWT 后注入（认证边界的职责）；
@@ -48,7 +54,39 @@ func FromIncoming(ctx context.Context) (uint64, error) {
 	}
 
 	uid, err := strconv.ParseUint(vals[0], 10, 64)
-	if err != nil || uid == 0 {
+	if err != nil || uid == SystemUserID {
+		return 0, apperrors.Unauthorized("invalid caller identity", err)
+	}
+	return uid, nil
+}
+
+// InjectOutgoingSystem 注入系统身份（user_id=0，见 SystemUserID）。
+// 供没有真实用户上下文的后台进程使用——目前唯一的场景是 order-service
+// 内嵌的 outbox relay：它替"已取消的订单"回补库存，动作属于系统而不是
+// 任何用户。下游只有显式声明接受系统调用的方法（用 FromIncomingAllowSystem
+// 读身份）才会放行 0；用 FromIncoming 的方法照样拒绝——系统身份不是万能钥匙。
+func InjectOutgoingSystem(ctx context.Context) context.Context {
+	return InjectOutgoing(ctx, SystemUserID)
+}
+
+// FromIncomingAllowSystem 与 FromIncoming 的唯一差异：放行 user_id=0
+// （系统身份）。只有"调用方可能是内部后台进程"的方法（如 RestoreStock 的
+// outbox 投递路径）才应该用它，且这类方法必须另有幂等背书（message_id
+// 去重）——系统调用放行的是身份门槛，不是正确性门槛。
+// 面向真实用户的方法必须继续用 FromIncoming。
+func FromIncomingAllowSystem(ctx context.Context) (uint64, error) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return 0, apperrors.Unauthorized("missing caller identity", nil)
+	}
+
+	vals := md.Get(MetadataKeyUserID)
+	if len(vals) == 0 {
+		return 0, apperrors.Unauthorized("missing caller identity", nil)
+	}
+
+	uid, err := strconv.ParseUint(vals[0], 10, 64)
+	if err != nil {
 		return 0, apperrors.Unauthorized("invalid caller identity", err)
 	}
 	return uid, nil

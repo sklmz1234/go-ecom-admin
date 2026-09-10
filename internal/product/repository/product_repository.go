@@ -23,6 +23,9 @@ type Repository interface {
 	// remaining stock；DeductStock 的调用方还要 price/name 做下单快照）。
 	DeductStock(ctx context.Context, productID uint64, quantity int32) (*model.Product, error)
 	RestoreStock(ctx context.Context, productID uint64, quantity int32) (*model.Product, error)
+	// RestoreStockIdempotent（阶段 4）：message_id 去重的幂等回补，
+	// 供 outbox relay 的至少一次投递使用——重复投递只生效一次。
+	RestoreStockIdempotent(ctx context.Context, messageID string, productID uint64, quantity int32) (*model.Product, error)
 }
 
 type gormRepository struct {
@@ -140,7 +143,7 @@ func (r *gormRepository) DeductStock(ctx context.Context, productID uint64, quan
 
 // RestoreStock 是 DeductStock 的补偿操作：无条件加回库存。
 // 它不幂等（重复调用会重复加），幂等性由调用方（order-service 的编排逻辑）
-// 保证——学习项目做到补偿为止，生产的下一步是本地消息表 + 对账。
+// 保证。消息驱动的回补（可能重复投递）应该走 RestoreStockIdempotent。
 func (r *gormRepository) RestoreStock(ctx context.Context, productID uint64, quantity int32) (*model.Product, error) {
 	result := r.db.WithContext(ctx).Model(&model.Product{}).
 		Where("id = ?", productID).
@@ -151,5 +154,49 @@ func (r *gormRepository) RestoreStock(ctx context.Context, productID uint64, qua
 	if result.RowsAffected == 0 {
 		return nil, apperrors.NotFound("product not found", nil)
 	}
+	return r.GetByID(ctx, productID)
+}
+
+// RestoreStockIdempotent 是消息驱动回补的幂等版本（阶段 4）：
+// 去重表 INSERT 和库存 +n 在同一个事务里。INSERT 撞主键（message_id 已存在）
+// 说明这笔回补已生效过——不加库存、直接返回成功，把 relay 的"至少一次投递"
+// 收敛成"恰好一次生效"。
+//
+// 为什么去重和生效必须原子：若分两步，"加了库存但去重记录没写上"的崩溃
+// 窗口会让重投再补一次（库存虚增）；反过来"写了去重记录但没加库存"会让
+// 重投被误判为已处理（库存永久少计）。同事务让两种窗口都不存在。
+//
+// 商品不存在时返回 NotFound 并整体回滚——去重记录也不留：回补没生效，
+// 就不该冒充"已处理"，relay 会按退避重试直到 DEAD 死信。
+func (r *gormRepository) RestoreStockIdempotent(ctx context.Context, messageID string, productID uint64, quantity int32) (*model.Product, error) {
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&model.StockRestore{
+			MessageID: messageID,
+			ProductID: productID,
+			Quantity:  quantity,
+		}).Error; err != nil {
+			if errors.Is(err, gorm.ErrDuplicatedKey) {
+				// 已处理过：事务里什么都不做直接提交（空事务），
+				// 幂等语义=重复调用与第一次调用的可观察结果一致。
+				return nil
+			}
+			return apperrors.Internal("failed to record stock restore", err)
+		}
+		result := tx.Model(&model.Product{}).
+			Where("id = ?", productID).
+			Update("stock", gorm.Expr("stock + ?", quantity))
+		if result.Error != nil {
+			return apperrors.Internal("failed to restore stock", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return apperrors.NotFound("product not found", nil)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	// 无论本次是真回补还是去重命中，读回当前库存返回即可——
+	// 调用方（relay）只关心"成功了没有"，remaining 用于日志。
 	return r.GetByID(ctx, productID)
 }

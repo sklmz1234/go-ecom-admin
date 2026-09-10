@@ -14,7 +14,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: seed
-          image: go-ecom-admin/seed
+          image: go-ecom-admin/seed:TAG
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef: { name: app-config }

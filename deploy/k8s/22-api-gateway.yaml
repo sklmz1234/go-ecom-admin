@@ -33,7 +33,7 @@ spec:
     spec:
       containers:
         - name: api-gateway
-          image: go-ecom-admin/api-gateway
+          image: go-ecom-admin/api-gateway:TAG
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef: { name: app-config } # 含 GRPC_CLIENT_*_ADDR=Service名:端口

@@ -4,7 +4,15 @@
 COMPOSE := docker compose
 K8S_DIR := deploy/k8s
 
-.PHONY: help up down restart logs ps build seed clean k8s-build k8s-apply k8s-delete k8s-seed k8s-status
+# 镜像唯一 tag（阶段 4 修复）：默认取当前 commit 短哈希。
+# 为什么必须唯一：:latest + IfNotPresent 的组合下，重建镜像后 K8s 看到
+# "同名 tag 已存在"就直接用缓存的旧镜像，rollout 永远拿到幽灵旧版本；
+# digest 引用又会被 kind 的 containerd 当成外部仓库去 pull。唯一 tag 让
+# 每次部署的镜像名都不同，IfNotPresent 语义反而变成优势（一定不存在，
+# 一定用新构建的那份）。可用 make k8s-build TAG=my-feature 显式覆盖。
+TAG ?= $(shell git rev-parse --short HEAD)
+
+.PHONY: help up down restart logs ps build seed clean k8s-build k8s-apply k8s-delete k8s-seed k8s-status k8s-rollout
 
 help: ## 显示本帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-10s %s\n", $$1, $$2}'
@@ -33,11 +41,21 @@ seed: ## 灌入测试数据（10 用户 + 20 商品，用户密码均为 123456�
 clean: ## 停止并删除容器和数据卷（数据会清零，慎用）
 	$(COMPOSE) down -v
 
-k8s-build: ## 构建全部镜像（kind 集群经 containerd 镜像存储可直接使用）
-	$(COMPOSE) build
+k8s-build: ## 构建全部镜像并打唯一 TAG（kind 集群经 containerd 镜像存储可直接使用）
+	TAG=$(TAG) $(COMPOSE) build
 
-k8s-apply: ## 部署整套到 K8s（namespace ecom；首次先 make k8s-build）
-	kubectl apply -f $(K8S_DIR)
+k8s-apply: ## 部署整套到 K8s（namespace ecom；清单里的 :TAG 占位替换为当前 TAG）
+	# 清单里镜像写的是 go-ecom-admin/<svc>:TAG 占位符，apply 前用 sed
+	# 现场替换——Deployment 的 image 字段一变，K8s 自动滚动更新，
+	# 不需要单独的 rollout 命令。选 sed 而不是 kustomize：单参数替换，
+	# 不引目录结构和 images transformer 的额外概念。
+	sed 's/:TAG/:$(TAG)/g' $(K8S_DIR)/*.yaml | kubectl apply -f -
+
+k8s-rollout: ## 只滚动更新四个服务到当前 TAG（镜像已构建好、只想换版本时用）
+	kubectl set image -n ecom deployment/user-service user-service=go-ecom-admin/user-service:$(TAG)
+	kubectl set image -n ecom deployment/product-service product-service=go-ecom-admin/product-service:$(TAG)
+	kubectl set image -n ecom deployment/order-service order-service=go-ecom-admin/order-service:$(TAG)
+	kubectl set image -n ecom deployment/api-gateway api-gateway=go-ecom-admin/api-gateway:$(TAG)
 
 k8s-delete: ## 删除 K8s 部署（StatefulSet 的 PVC 保留，MySQL 数据不丢）
 	kubectl delete -f $(K8S_DIR)

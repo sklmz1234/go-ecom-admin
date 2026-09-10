@@ -636,14 +636,27 @@ func (x *DeductStockResponse) GetName() string {
 	return ""
 }
 
-// RestoreStock 是 DeductStock 的补偿操作（Saga 回滚）：下单编排中后续步骤失败时
-// 由 order-service 调用，无条件加回库存。它是幂等不安全的（重复调用会重复加），
-// 调用方必须保证"一次成功的 Deduct 最多对应一次 Restore"——学习项目做到补偿为止，
-// 生产需要重试 + 对账兜底。
+// RestoreStock 是 DeductStock 的补偿操作（Saga 回滚），无条件加回库存。
+//
+// 阶段 4（本地消息表）后它有两种调用形态，由 message_id 区分：
+//   - message_id 为空：非消息驱动的直接调用（如 CreateOrder 失败时的同步补偿），
+//     维持 3B 老语义——幂等不安全，重复调用会重复加，调用方自己保证
+//     "一次成功的 Deduct 最多对应一次 Restore"。
+//   - message_id 非空：outbox relay 驱动的投递。服务端用 message_id 做去重键
+//     （stock_restores 表），同一 message_id 重复投递只加一次库存——
+//     这是把 relay 的"至少一次投递"收敛成"恰好一次生效"的幂等另一半。
+//
+// 身份约定：消息驱动的调用由 order-service 内部的 relay goroutine 发起，
+// 没有真实用户身份，按系统身份约定注入 user_id=0（pkg/identity 的
+// InjectOutgoingSystem / FromIncomingAllowSystem）——0 不是任何真实用户，
+// 审计日志里 caller_id=0 即"系统内部回补"。
 type RestoreStockRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ProductId     uint64                 `protobuf:"varint,1,opt,name=product_id,json=productId,proto3" json:"product_id,omitempty"`
-	Quantity      int32                  `protobuf:"varint,2,opt,name=quantity,proto3" json:"quantity,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	ProductId uint64                 `protobuf:"varint,1,opt,name=product_id,json=productId,proto3" json:"product_id,omitempty"`
+	Quantity  int32                  `protobuf:"varint,2,opt,name=quantity,proto3" json:"quantity,omitempty"`
+	// 幂等键（UUID），由 order 侧 outbox 在写消息时生成。proto3 加字段
+	// 向后兼容：老调用方不传即为空，走老语义。见上方方法级注释。
+	MessageId     string `protobuf:"bytes,3,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -690,6 +703,13 @@ func (x *RestoreStockRequest) GetQuantity() int32 {
 		return x.Quantity
 	}
 	return 0
+}
+
+func (x *RestoreStockRequest) GetMessageId() string {
+	if x != nil {
+		return x.MessageId
+	}
+	return ""
 }
 
 type RestoreStockResponse struct {
@@ -865,11 +885,13 @@ const file_proto_product_product_proto_rawDesc = "" +
 	"\x0fremaining_stock\x18\x01 \x01(\x05R\x0eremainingStock\x12\x1f\n" +
 	"\vprice_cents\x18\x02 \x01(\x03R\n" +
 	"priceCents\x12\x12\n" +
-	"\x04name\x18\x03 \x01(\tR\x04name\"P\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\"o\n" +
 	"\x13RestoreStockRequest\x12\x1d\n" +
 	"\n" +
 	"product_id\x18\x01 \x01(\x04R\tproductId\x12\x1a\n" +
-	"\bquantity\x18\x02 \x01(\x05R\bquantity\"?\n" +
+	"\bquantity\x18\x02 \x01(\x05R\bquantity\x12\x1d\n" +
+	"\n" +
+	"message_id\x18\x03 \x01(\tR\tmessageId\"?\n" +
 	"\x14RestoreStockResponse\x12'\n" +
 	"\x0fremaining_stock\x18\x01 \x01(\x05R\x0eremainingStock\"\x9e\x01\n" +
 	"\aProduct\x12\x0e\n" +

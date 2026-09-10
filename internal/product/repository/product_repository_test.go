@@ -27,9 +27,12 @@ import (
 
 func newSQLiteDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	// TranslateError 与生产 main.go 的 gorm.Config 对齐：sqlite 唯一约束
+	// 冲突也要翻译成 gorm.ErrDuplicatedKey，RestoreStockIdempotent 的
+	// 去重分支才能在单测里被真实触发。
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{TranslateError: true})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Product{}))
+	require.NoError(t, db.AutoMigrate(&model.Product{}, &model.StockRestore{}))
 	return db
 }
 
@@ -226,4 +229,40 @@ func TestList(t *testing.T) {
 		assert.Equal(t, int64(25), total)
 		assert.Empty(t, products)
 	})
+}
+
+// RestoreStockIdempotent（阶段 4 幂等回补）的核心考点：
+// 同一 message_id 重复调用库存只加一次——去重表主键冲突即"已生效过"，
+// 这是把 relay 的至少一次投递收敛成恰好一次的幂等另一半。
+func TestRestoreStockIdempotent(t *testing.T) {
+	repo := NewGormRepository(newSQLiteDB(t))
+	ctx := context.Background()
+	p := seedProduct(t, repo, "机械键盘", 19900, 10)
+
+	got, err := repo.RestoreStockIdempotent(ctx, "msg-1", p.ID, 3)
+	require.NoError(t, err)
+	assert.Equal(t, int32(13), got.Stock)
+
+	got, err = repo.RestoreStockIdempotent(ctx, "msg-1", p.ID, 3)
+	require.NoError(t, err)
+	assert.Equal(t, int32(13), got.Stock, "同一 message_id 重投不能再加库存")
+
+	got, err = repo.RestoreStockIdempotent(ctx, "msg-2", p.ID, 3)
+	require.NoError(t, err)
+	assert.Equal(t, int32(16), got.Stock, "不同 message_id 是另一笔回补，正常生效")
+}
+
+// 商品不存在时返回 NotFound 且整体回滚——去重记录也不能留：
+// 回补没生效就留"已处理"记录，会挡住未来合法的同名消息重投。
+func TestRestoreStockIdempotent_NotFoundRollsBack(t *testing.T) {
+	db := newSQLiteDB(t)
+	repo := NewGormRepository(db)
+	ctx := context.Background()
+
+	_, err := repo.RestoreStockIdempotent(ctx, "msg-x", 999, 1)
+	requireAppCode(t, err, apperrors.CodeNotFound)
+
+	var count int64
+	require.NoError(t, db.Model(&model.StockRestore{}).Count(&count).Error)
+	assert.Zero(t, count, "NotFound 必须整体回滚，去重表不留假'已处理'记录")
 }

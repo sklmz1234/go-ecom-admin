@@ -33,6 +33,7 @@ import (
 	"go-ecom-admin/pkg/telemetry"
 
 	"go-ecom-admin/internal/order/model"
+	"go-ecom-admin/internal/order/outbox"
 	"go-ecom-admin/internal/order/repository"
 	"go-ecom-admin/internal/order/service"
 	orderpb "go-ecom-admin/proto/order"
@@ -95,10 +96,11 @@ func main() {
 		log.Fatal("attach gorm otel plugin", zap.Error(err))
 	}
 	// 带锁迁移，理由见 cmd/user-service/main.go：多副本并发建表竞态。
-	if err := database.Migrate(db, 30*time.Second, &model.Order{}, &model.OrderItem{}); err != nil {
+	if err := database.Migrate(db, 30*time.Second, &model.Order{}, &model.OrderItem{}, &model.OutboxMessage{}); err != nil {
 		log.Fatal("auto migrate failed", zap.Error(err))
 	}
 	repo := repository.NewGormRepository(db)
+	outboxRepo := repository.NewOutboxRepository(db)
 
 	// order-service 是 gRPC 客户端（调 product-service 扣库存）兼服务端。
 	// 客户端侧必须带 otel stats handler，trace 才能接力到下游（见 product_client.go）。
@@ -107,7 +109,14 @@ func main() {
 		log.Fatal("dial product-service", zap.String("addr", cfg.GRPCClient.ProductServiceAddr), zap.Error(err))
 	}
 
-	svc := service.New(repo, productClient, log)
+	svc := service.New(repo, outboxRepo, productClient, log)
+
+	// outbox relay（阶段 4）：内嵌投递 goroutine，随进程生命周期运行。
+	// ctx 取消（SIGTERM）时 Run 在当前一轮投递结束后返回；行锁事务
+	// 若在退出瞬间未提交，连接断开自动回滚，消息回到 PENDING——
+	// 至少一次语义保证重启后接着投。
+	relay := outbox.NewRelay(outboxRepo, productClient, log, 0, 0)
+	go relay.Run(ctx)
 
 	// 服务端埋点：提取上游 trace 上下文 + 每轮 RPC 建服务端 span。
 	grpcServer := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()))

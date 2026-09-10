@@ -60,6 +60,13 @@ func (f *countingRepo) RestoreStock(ctx context.Context, productID uint64, quant
 	return f.product, nil
 }
 
+func (f *countingRepo) RestoreStockIdempotent(ctx context.Context, messageID string, productID uint64, quantity int32) (*model.Product, error) {
+	if f.product == nil {
+		return nil, apperrors.NotFound("product not found", nil)
+	}
+	return f.product, nil
+}
+
 // setup 起一台内存假 Redis（miniredis），返回装饰器和它的组件。
 // miniredis 让单测不依赖真 Redis，CI/本地都能跑——和 sqlite :memory: 测 GORM 同一思路。
 func setup(t *testing.T, next Repository) (*cachedRepository, *miniredis.Miniredis) {

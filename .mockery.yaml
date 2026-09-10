@@ -40,3 +40,9 @@ packages:
           filename: mock_product_client.go
           dir: "{{.InterfaceDir}}/mocks"
           outpkg: mocks
+      OutboxRepository:
+        config:
+          mockname: MockOutboxRepository
+          filename: mock_outbox_repository.go
+          dir: "{{.InterfaceDir}}/mocks"
+          outpkg: mocks

@@ -164,6 +164,19 @@ func (r *cachedRepository) RestoreStock(ctx context.Context, productID uint64, q
 	return p, nil
 }
 
+// RestoreStockIdempotent（阶段 4）与 RestoreStock 同一缓存处理：
+// 幂等性在 gorm 层的去重表里，缓存层只管写后失效，不感知 message_id。
+func (r *cachedRepository) RestoreStockIdempotent(ctx context.Context, messageID string, productID uint64, quantity int32) (*model.Product, error) {
+	p, err := r.next.RestoreStockIdempotent(ctx, messageID, productID, quantity)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.rdb.Del(ctx, productKey(productID)).Err(); err != nil {
+		return nil, apperrors.Internal("failed to invalidate product cache", err)
+	}
+	return p, nil
+}
+
 // isNotFound 按项目 errors 包的惯例判断 NotFound 语义：
 // errors.As 解出 AppError 再比 Code（errors 包没有暴露哨兵错误，这是项目定的模式）。
 func isNotFound(err error) bool {

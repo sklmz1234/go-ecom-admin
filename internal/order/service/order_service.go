@@ -10,7 +10,10 @@ package service
 
 import (
 	"context"
+	"encoding/json"
+	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	apperrors "go-ecom-admin/pkg/errors"
@@ -25,12 +28,13 @@ type Service struct {
 	orderpb.UnimplementedOrderServiceServer
 
 	repo     repository.Repository
+	outbox   repository.OutboxRepository
 	products repository.ProductClient
 	log      *zap.Logger
 }
 
-func New(repo repository.Repository, products repository.ProductClient, log *zap.Logger) *Service {
-	return &Service{repo: repo, products: products, log: log}
+func New(repo repository.Repository, outbox repository.OutboxRepository, products repository.ProductClient, log *zap.Logger) *Service {
+	return &Service{repo: repo, outbox: outbox, products: products, log: log}
 }
 
 // deductedItem 记录一笔已成功扣减，补偿时按它逐项回补。
@@ -108,7 +112,9 @@ func (s *Service) CreateOrder(ctx context.Context, req *orderpb.CreateOrderReque
 // 补偿不回传错误：编排已经失败，调用方只需要知道原始失败原因。
 func (s *Service) compensate(ctx context.Context, deducted []deductedItem) {
 	for _, d := range deducted {
-		if err := s.products.RestoreStock(ctx, d.productID, d.quantity); err != nil {
+		// messageID 传空串：同步补偿走 product 侧的老语义（不幂等）——
+		// 这里调用方自己保证只补一次，重试/去重是 outbox 路径的事。
+		if err := s.products.RestoreStock(ctx, d.productID, d.quantity, ""); err != nil {
 			s.log.Error("COMPENSATION FAILED: stock not restored, manual reconciliation required",
 				zap.Uint64("product_id", d.productID),
 				zap.Int32("quantity", d.quantity),
@@ -165,15 +171,18 @@ func (s *Service) ListMyOrders(ctx context.Context, req *orderpb.ListMyOrdersReq
 	return &orderpb.ListMyOrdersResponse{Orders: pbOrders, Total: total}, nil
 }
 
-// CancelOrder 把 3A 里"只在失败补偿里用到"的 RestoreStock 变成显式业务路径：
-// PENDING → CANCELLED 单方向流转 + 逐项回补库存。
+// CancelOrder（阶段 4 起为全异步回补）：PENDING → CANCELLED 的状态迁移和
+// "每个订单项一条 stock.restore 消息"在同一个本地事务里原子落库
+// （CancelWithOutbox），接口立即返回 CANCELLED；库存由后台 relay 在
+// 秒级内投递回补，投递失败自动指数退避重试（见 internal/order/outbox）。
 //
-// 顺序是精心选的：**先原子迁移状态，再回补库存**。
-// 反过来（先回补再改状态）若改状态失败，订单仍是 PENDING、用户可以再次取消，
-// 同一件库存会被回补两次——比"状态已取消但回补失败"更难收拾。后者留下的是
-// 库存少计的 leak，ERROR 日志 + 对账兜底（与 compensate 同一哲学）；
-// 且状态迁移是条件更新（WHERE status='PENDING'），重复取消在数据库层就被挡住，
-// 不存在重复回补的入口。
+// 这是本地消息表的教科书应用：业务状态与消息同生共死，不存在
+// "状态改了消息没记下"或"消息记了状态没改"的中间态。代价是取消后
+// 极短的"库存还没回来"窗口（一个 relay tick，2s）——比起同步补偿
+// "product 一挂取消就漏库存"，这是值得的交换。
+//
+// 幂等键 message_id 在这里生成（UUID，一条消息一个）：product 侧
+// 去重表靠它把 relay 的至少一次投递收敛成恰好一次生效。
 func (s *Service) CancelOrder(ctx context.Context, req *orderpb.CancelOrderRequest) (*orderpb.CancelOrderResponse, error) {
 	callerID, err := identity.FromIncoming(ctx)
 	if err != nil {
@@ -195,34 +204,44 @@ func (s *Service) CancelOrder(ctx context.Context, req *orderpb.CancelOrderReque
 		return nil, apperrors.ToGRPCStatus(apperrors.NotFound("order not found", nil))
 	}
 
-	// 状态机守卫：只允许 PENDING → CANCELLED 单方向流转。
-	// 已取消/已支付的订单取消是"请求合法但状态不允许"——FailedPrecondition（409）。
+	// 状态机守卫：只允许 PENDING → CANCELLED 单方向流转（提前 409，
+	// 省一次注定失败的事务；repo 层的条件更新仍是并发兜底）。
 	if o.Status != model.StatusPending {
 		return nil, apperrors.ToGRPCStatus(apperrors.FailedPrecondition("only pending orders can be cancelled", nil))
 	}
 
-	// 原子迁移（防双击/重试的并发取消），然后逐项回补。
-	if err := s.repo.UpdateStatus(ctx, o.ID, model.StatusPending, model.StatusCancelled); err != nil {
+	// 每个订单项组装一条回补消息（FIFO 投递，逐项对应扣减记录）。
+	messages := make([]*model.OutboxMessage, 0, len(o.Items))
+	for _, it := range o.Items {
+		payload, err := json.Marshal(model.StockRestorePayload{
+			ProductID: it.ProductID,
+			Quantity:  it.Quantity,
+			OrderID:   o.ID,
+		})
+		if err != nil {
+			// json.Marshal 一个纯数字字段结构体实际不会失败，防御性兜底。
+			return nil, apperrors.ToGRPCStatus(apperrors.Internal("failed to encode outbox payload", err))
+		}
+		messages = append(messages, &model.OutboxMessage{
+			MessageID:   uuid.NewString(),
+			Type:        model.OutboxTypeStockRestore,
+			Payload:     string(payload),
+			Status:      model.OutboxStatusPending,
+			NextRetryAt: time.Now(),
+		})
+	}
+
+	// 一个事务：条件迁移状态（WHERE status='PENDING'）+ 批量写消息。
+	// 并发取消只有一个能命中；不命中的整体回滚，返回 409。
+	if err := s.outbox.CancelWithOutbox(ctx, o.ID, model.StatusPending, model.StatusCancelled, messages); err != nil {
 		return nil, apperrors.ToGRPCStatus(err)
 	}
 
-	callCtx := identity.InjectOutgoing(ctx, callerID)
-	for _, it := range o.Items {
-		if err := s.products.RestoreStock(callCtx, it.ProductID, it.Quantity); err != nil {
-			s.log.Error("CANCEL RESTORE FAILED: stock not restored, manual reconciliation required",
-				zap.Uint64("order_id", o.ID),
-				zap.Uint64("product_id", it.ProductID),
-				zap.Int32("quantity", it.Quantity),
-				zap.Error(err),
-			)
-		}
-	}
-
 	o.Status = model.StatusCancelled
-	s.log.Info("order cancelled",
+	s.log.Info("order cancelled, outbox messages queued",
 		zap.Uint64("order_id", o.ID),
 		zap.Uint64("user_id", callerID),
-		zap.Int("restored_items", len(o.Items)),
+		zap.Int("queued_items", len(messages)),
 	)
 	return &orderpb.CancelOrderResponse{Order: toProto(o)}, nil
 }
