@@ -168,11 +168,15 @@ services:
       # seed 重置库表后要清商品读缓存（否则旧缓存里的数据没有 owner_id，
       # 归属校验会误判 403），所以需要 Redis 地址。
       REDIS_ADDR: redis:6379
+      # 灌完 MySQL 还要全量重建搜索索引（阶段 5A），所以需要 ES 地址。
+      ELASTICSEARCH_ADDR: http://elasticsearch:9200
       TZ: Asia/Shanghai
     depends_on:
       mysql:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      elasticsearch:
         condition: service_healthy
 
   # product-service 读缓存（阶段 2C）。不暴露宿主机端口——只有容器网络内的

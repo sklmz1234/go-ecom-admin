@@ -21,20 +21,127 @@ import (
 	"go-ecom-admin/internal/product/repository/mocks"
 )
 
-// fakeSearcher 是 ProductSearcher 的测试替身：只实现 Search 的行为录制，
-// Index/Delete 在查询链路测试里用不到。
+// fakeSearcher 是 ProductSearcher 的测试替身：Search 返回预置结果，
+// Index/Delete 录制调用（双写测试的断言对象），也可注入错误模拟 ES 故障。
 type fakeSearcher struct {
 	ids   []uint64
 	total int64
 	err   error
+
+	indexed   []*model.Product
+	deleted   []uint64
+	indexErr  error
+	deleteErr error
 }
 
 func (f *fakeSearcher) Search(_ context.Context, _ string, _, _ int) ([]uint64, int64, error) {
 	return f.ids, f.total, f.err
 }
 
-func (f *fakeSearcher) Index(_ context.Context, _ *model.Product) error { return nil }
-func (f *fakeSearcher) Delete(_ context.Context, _ uint64) error        { return nil }
+func (f *fakeSearcher) Index(_ context.Context, p *model.Product) error {
+	f.indexed = append(f.indexed, p)
+	return f.indexErr
+}
+
+func (f *fakeSearcher) Delete(_ context.Context, id uint64) error {
+	f.deleted = append(f.deleted, id)
+	return f.deleteErr
+}
+
+// —— 同步双写（决策点 B）测试 ——
+
+// TestCreate_DualWritesES：MySQL 写入成功后必须同步索引同一商品到 ES，
+// 这是"管理台建商品、C 端立刻能搜到"（验收第 7 条）的机制保证。
+func TestCreate_DualWritesES(t *testing.T) {
+	next := mocks.NewMockRepository(t)
+	searcher := &fakeSearcher{}
+	p := &model.Product{Name: "蓝牙耳机", Description: "主动降噪", ImageURL: "https://x/y.jpg"}
+	next.EXPECT().Create(mock.Anything, p).Return(nil)
+
+	repo := NewSearchRepository(next, searcher, zaptest.NewLogger(t))
+	require.NoError(t, repo.Create(context.Background(), p))
+
+	require.Len(t, searcher.indexed, 1)
+	assert.Same(t, p, searcher.indexed[0])
+}
+
+// TestCreate_ESFailureDoesNotBlock：双写失败只能记 WARN，主流程照常成功——
+// ES 是加速层不是正确性依赖，它的可用性不能绑进交易路径。
+func TestCreate_ESFailureDoesNotBlock(t *testing.T) {
+	next := mocks.NewMockRepository(t)
+	searcher := &fakeSearcher{indexErr: errors.New("es: connection refused")}
+	p := &model.Product{Name: "蓝牙耳机"}
+	next.EXPECT().Create(mock.Anything, p).Return(nil)
+
+	repo := NewSearchRepository(next, searcher, zaptest.NewLogger(t))
+	require.NoError(t, repo.Create(context.Background(), p), "ES 双写失败不能让 Create 失败")
+	assert.Len(t, searcher.indexed, 1, "索引动作确实尝试过")
+}
+
+// TestCreate_MySQLFailureSkipsES：MySQL 没写成就不能写 ES，
+// 否则索引里会出现库里不存在的幽灵商品（搜得到、点详情 404）。
+func TestCreate_MySQLFailureSkipsES(t *testing.T) {
+	next := mocks.NewMockRepository(t)
+	searcher := &fakeSearcher{}
+	p := &model.Product{Name: "蓝牙耳机"}
+	next.EXPECT().Create(mock.Anything, p).Return(errors.New("db: deadlock"))
+
+	repo := NewSearchRepository(next, searcher, zaptest.NewLogger(t))
+	require.Error(t, repo.Create(context.Background(), p))
+	assert.Empty(t, searcher.indexed)
+}
+
+// TestUpdate_DualWritesES：service 的 Update 是整体替换语义，传给 repo 的
+// model 带着最新 name/description/image_url，装饰器应原样索引它。
+func TestUpdate_DualWritesES(t *testing.T) {
+	next := mocks.NewMockRepository(t)
+	searcher := &fakeSearcher{}
+	p := &model.Product{ID: 7, Name: "新名字耳机", Description: "改名后"}
+	next.EXPECT().Update(mock.Anything, p).Return(nil)
+
+	repo := NewSearchRepository(next, searcher, zaptest.NewLogger(t))
+	require.NoError(t, repo.Update(context.Background(), p))
+
+	require.Len(t, searcher.indexed, 1)
+	assert.Equal(t, "新名字耳机", searcher.indexed[0].Name)
+}
+
+// TestUpdate_ESFailureDoesNotBlock：同 Create——改名后 ES 写失败，
+// 顶多是搜索里暂时还是旧名字（降级 LIKE 兜底），不能算更新失败。
+func TestUpdate_ESFailureDoesNotBlock(t *testing.T) {
+	next := mocks.NewMockRepository(t)
+	searcher := &fakeSearcher{indexErr: errors.New("es: circuit open")}
+	p := &model.Product{ID: 7, Name: "新名字耳机"}
+	next.EXPECT().Update(mock.Anything, p).Return(nil)
+
+	repo := NewSearchRepository(next, searcher, zaptest.NewLogger(t))
+	require.NoError(t, repo.Update(context.Background(), p))
+}
+
+// TestDelete_DualWritesES：删除商品必须同步删 ES 文档，
+// 否则会搜到已删除的商品（回表时被跳过，但 total 虚高）。
+func TestDelete_DualWritesES(t *testing.T) {
+	next := mocks.NewMockRepository(t)
+	searcher := &fakeSearcher{}
+	next.EXPECT().Delete(mock.Anything, uint64(7)).Return(nil)
+
+	repo := NewSearchRepository(next, searcher, zaptest.NewLogger(t))
+	require.NoError(t, repo.Delete(context.Background(), 7))
+
+	assert.Equal(t, []uint64{7}, searcher.deleted)
+}
+
+// TestDelete_ESFailureDoesNotBlock：ES 删不掉只记 WARN，残留文档
+// 在回表重排时被跳过，重跑 seed / reindex 会收敛。
+func TestDelete_ESFailureDoesNotBlock(t *testing.T) {
+	next := mocks.NewMockRepository(t)
+	searcher := &fakeSearcher{deleteErr: errors.New("es: timeout")}
+	next.EXPECT().Delete(mock.Anything, uint64(7)).Return(nil)
+
+	repo := NewSearchRepository(next, searcher, zaptest.NewLogger(t))
+	require.NoError(t, repo.Delete(context.Background(), 7))
+	assert.Equal(t, []uint64{7}, searcher.deleted)
+}
 
 // TestSearchByKeyword_ReordersByRecallOrder 是"召回+回表"架构的核心用例：
 // WHERE id IN (...) 不保证顺序（MockRepository 故意按主键序返回），

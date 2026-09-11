@@ -26,6 +26,9 @@ import (
 // 和缓存层同一个哲学：搜索引擎是加速层不是正确性依赖。
 // ES 挂了 → searchRepository 装饰器降级到 gorm 的 LIKE；
 // 服务启动时 ES 就连不上 → main 里干脆不包这层装饰器，裸 gorm 直接 LIKE。
+//
+// 装饰器同时承担「同步双写」：Create/Update/Delete 在 MySQL 成功后同步
+// 维护 ES 文档（失败仅告警），让 C 端能立刻搜到管理台的变更。
 
 // ProductSearcher 抽象搜索引擎的最小能力集。装饰器面向这个接口编程，
 // 单测可以用假实现注入（不用起真 ES），和 Repository 接口的用意一致。
@@ -93,6 +96,33 @@ func NewESSearcher(addr, index string, log *zap.Logger) (*ESSearcher, error) {
 		return nil, fmt.Errorf("elasticsearch: ensure index: %w", err)
 	}
 	return s, nil
+}
+
+// Recreate 删除并重建索引（带 IK mapping）。只给 seed / 未来的 reindex
+// 脚本用，业务服务启动永远走 ensureIndex 不调这里。
+// 为什么 seed 必须重建而不是"不存在才建"：seed 对 MySQL 是 TRUNCATE，
+// 自增 id 归零重用，旧索引里的文档 id 和新库必然对不上——seed 的语义是
+// "确定的初始状态"，ES 索引也是状态的一部分。
+func (s *ESSearcher) Recreate(ctx context.Context) error {
+	res, err := s.client.Indices.Delete([]string{s.index},
+		s.client.Indices.Delete.WithContext(ctx),
+	)
+	if err != nil {
+		return fmt.Errorf("elasticsearch: delete index: %w", err)
+	}
+	defer res.Body.Close()
+	// 404 = 索引本来就不存在（首次 seed）——删除的语义是"确保不存在"，
+	// 已经不存在就是目标状态，不算错误（和 Delete 文档的 404 处理同理）。
+	if res.IsError() && res.StatusCode != 404 {
+		body, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("elasticsearch: delete index %q: %s: %s", s.index, res.Status(), strings.TrimSpace(string(body)))
+	}
+
+	if err := s.ensureIndex(ctx); err != nil {
+		return err
+	}
+	s.log.Info("elasticsearch index recreated", zap.String("index", s.index))
+	return nil
 }
 
 // ensureIndex 索引不存在才创建。已存在时完全不动——mapping 变更（比如
@@ -308,11 +338,37 @@ func (r *searchRepository) SearchByKeyword(ctx context.Context, keyword string, 
 	return ordered, total, nil
 }
 
-// 其余方法全部透传——装饰器只增强搜索一个方法，这是它和缓存装饰器
-// 共享的纪律：增强点显式可见，不存在"悄悄改变行为"的方法。
+// 以下方法全部透传——装饰器只增强搜索（SearchByKeyword）和双写
+// （Create/Update/Delete），其余方法和缓存装饰器共享同一条纪律：
+// 增强点显式可见，不存在"悄悄改变行为"的方法。
+
+// —— 同步双写（阶段 5A，决策点 B）——
+//
+// Create/Update/Delete 在 MySQL 成功后同步写 ES，失败只记 WARN 不阻塞
+// 主流程：搜索引擎是加速层不是正确性依赖（和缓存同哲学），如果写 ES 挂了
+// 就让请求失败，等于把 ES 的可用性绑进了交易路径。不一致窗口的兜底：
+// 查询侧降级 LIKE + 重跑 seed 全量重建（Recreate）。
+//
+// 为什么双写收敛在装饰器而不是 service 层：ES 的存在对 service 完全透明
+// （main 里 ES 不可用就不包这层装饰器）。如果把 Index 调用写进
+// service.CreateProduct，service 就得多持有一个 ProductSearcher 依赖并
+// 处理"ES 没启用怎么办"的分支——装饰器模式让"有没有搜索引擎"这个差异
+// 只出现在 main 的装配代码里。
+//
+// DeductStock/RestoreStock 保持纯透传不写 ES：stock 本来就不在索引里
+// （见 productDoc 注释），高变字段天然免同步——这是"索引只放低变字段"
+// 设计直接兑现的红利。
 
 func (r *searchRepository) Create(ctx context.Context, p *model.Product) error {
-	return r.next.Create(ctx, p)
+	if err := r.next.Create(ctx, p); err != nil {
+		return err
+	}
+	// p.ID 已由 gorm 回填；doc _id = 商品 id，重复写是覆盖（天然幂等）。
+	if err := r.searcher.Index(ctx, p); err != nil {
+		r.log.Warn("elasticsearch index on create failed, product invisible to search until reseed",
+			zap.Uint64("product_id", p.ID), zap.Error(err))
+	}
+	return nil
 }
 
 func (r *searchRepository) GetByID(ctx context.Context, id uint64) (*model.Product, error) {
@@ -320,11 +376,27 @@ func (r *searchRepository) GetByID(ctx context.Context, id uint64) (*model.Produ
 }
 
 func (r *searchRepository) Update(ctx context.Context, p *model.Product) error {
-	return r.next.Update(ctx, p)
+	if err := r.next.Update(ctx, p); err != nil {
+		return err
+	}
+	// service 的 Update 是整体替换语义，p 上带着最新的 name/description/
+	// image_url，直接索引 p 即可，不用为 ES 多查一次库。
+	if err := r.searcher.Index(ctx, p); err != nil {
+		r.log.Warn("elasticsearch index on update failed, search may serve stale doc until reseed",
+			zap.Uint64("product_id", p.ID), zap.Error(err))
+	}
+	return nil
 }
 
 func (r *searchRepository) Delete(ctx context.Context, id uint64) error {
-	return r.next.Delete(ctx, id)
+	if err := r.next.Delete(ctx, id); err != nil {
+		return err
+	}
+	if err := r.searcher.Delete(ctx, id); err != nil {
+		r.log.Warn("elasticsearch delete failed, stale doc may be recalled until reseed",
+			zap.Uint64("product_id", id), zap.Error(err))
+	}
+	return nil
 }
 
 func (r *searchRepository) List(ctx context.Context, page, pageSize int) ([]*model.Product, int64, error) {
