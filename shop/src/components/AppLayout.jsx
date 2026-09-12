@@ -39,18 +39,19 @@ export default function AppLayout() {
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Header style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+      <Header style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '0 16px' }}>
         <Link to="/" style={{ color: '#fff', fontSize: 18, fontWeight: 600, whiteSpace: 'nowrap' }}>
           GoEcom 商城
         </Link>
-        {/* key=keyword：URL 里的关键词变化时强制重建输入框，保证框内文字与 URL 同步 */}
+        {/* key=keyword：URL 里的关键词变化时强制重建输入框，保证框内文字与 URL 同步。
+            flex:1 + minWidth:0 让搜索框在窄屏下压缩而不是把登录按钮挤出屏幕。 */}
         <Input.Search
           key={keyword}
           defaultValue={keyword}
           placeholder="搜索商品"
           allowClear
           onSearch={handleSearch}
-          style={{ maxWidth: 420 }}
+          style={{ flex: 1, maxWidth: 420, minWidth: 0 }}
         />
         <div style={{ marginLeft: 'auto' }}>
           {token ? (
