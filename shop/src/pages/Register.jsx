@@ -30,7 +30,7 @@ export default function Register() {
       // 不该让用户在登录页把刚输过的账号密码再敲一遍。
       try {
         const res = await login({ username: values.username, password: values.password });
-        setSession(res.token, res.user);
+        setSession({ token: res.token, user: res.user });
         message.success(`注册成功，欢迎，${res.user.username}`);
         navigate(redirect, { replace: true });
       } catch {

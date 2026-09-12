@@ -19,7 +19,7 @@ export default function Login() {
     setSubmitting(true);
     try {
       const res = await login(values);
-      setSession(res.token, res.user);
+      setSession({ token: res.token, user: res.user });
       message.success(`欢迎回来，${res.user.username}`);
       // replace：登录页不该留在历史记录里，后退键不该退回登录页。
       navigate(redirect, { replace: true });
