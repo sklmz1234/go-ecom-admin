@@ -63,6 +63,13 @@ services:
     restart: unless-stopped
     ports:
       - "${ES_HOST_PORT:-9200}:9200"
+    volumes:
+      # 必须挂数据卷：ES 数据默认存在容器可写层，容器一旦被 recreate
+      # （compose up 重建依赖链等）索引就全丢——而重建后没有任何组件会
+      # 自动回填（双写只管增量，不管存量），搜索会悄悄返空直到下次 seed。
+      # 2026-09-12 实测踩中：重建 product 镜像导致 ES 被连带 recreate，
+      # 搜索 total=0。和 mysql/redis 的数据卷是同一纪律。
+      - es-data:/usr/share/elasticsearch/data
     healthcheck:
       # ES 启动慢（JVM + IK 词典加载），start_period 给足 60s。
       test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health >/dev/null || exit 1"]
@@ -245,3 +252,4 @@ services:
 volumes:
   mysql-data:
   redis-data:
+  es-data:

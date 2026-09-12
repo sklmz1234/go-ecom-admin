@@ -127,8 +127,15 @@ func (r *gormRepository) List(ctx context.Context, page, pageSize int) ([]*model
 // "搜得到"不求"搜得全"，召回率损失可接受，全站不 500 才是目标。
 //
 // LIKE 通配符转义：用户输入里的 % 和 _ 是 LIKE 的元字符，不转义的话
-// 搜 "100%" 会变成全表匹配。ESCAPE '\' 声明转义符，MySQL 和 SQLite
-// （单测用）都支持这套语法。
+// 搜 "100%" 会变成全表匹配。
+//
+// 转义符选 '!' 而不是常见的 '\'（2026-09-12 验收实测踩坑修复）：
+// MySQL 的字符串字面量里反斜杠本身是转义符，ESCAPE '\' 会把闭引号
+// 转义掉直接 1064 语法错误；而 SQLite 字符串里反斜杠是字面量，
+// ESCAPE '\' 反而合法——单测（sqlite）全绿、真库（MySQL）爆炸的
+// 经典方言陷阱。'!' 在两种方言里都没有特殊含义，是最大公约数。
+// 用 '!' 做转义符后，关键词里的反斜杠无需特殊处理（LIKE 模式里
+// 它就是字面量，参数传值也不经过字符串字面量解析）。
 func (r *gormRepository) SearchByKeyword(ctx context.Context, keyword string, page, pageSize int) ([]*model.Product, int64, error) {
 	if page < 1 {
 		page = 1
@@ -137,13 +144,15 @@ func (r *gormRepository) SearchByKeyword(ctx context.Context, keyword string, pa
 		pageSize = 20
 	}
 
-	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(keyword)
+	// 先转义转义符自身，再转义通配符——顺序反了会把刚生成的 !% 的
+	// 感叹号再转义一遍，模式就全乱了。
+	escaped := strings.NewReplacer(`!`, `!!`, `%`, `!%`, `_`, `!_`).Replace(keyword)
 	like := "%" + escaped + "%"
 
 	var products []*model.Product
 	var total int64
 
-	db := r.db.WithContext(ctx).Model(&model.Product{}).Where(`name LIKE ? ESCAPE '\'`, like)
+	db := r.db.WithContext(ctx).Model(&model.Product{}).Where(`name LIKE ? ESCAPE '!'`, like)
 	if err := db.Count(&total).Error; err != nil {
 		return nil, 0, apperrors.Internal("failed to count products by keyword", err)
 	}

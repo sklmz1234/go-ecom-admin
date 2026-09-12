@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/elastic/go-elasticsearch/v8"
 	"go.uber.org/zap"
@@ -29,6 +32,57 @@ import (
 //
 // 装饰器同时承担「同步双写」：Create/Update/Delete 在 MySQL 成功后同步
 // 维护 ES 文档（失败仅告警），让 C 端能立刻搜到管理台的变更。
+
+// —— ES 调用的双层超时（验收 8 事故修复，2026-09-12 实测复盘）——
+//
+// 事故原型：docker stop elasticsearch 后容器 IP 从 Docker 网络消失，
+// 没有主机回 RST——TCP SYN 发向黑洞，没有任何回应。ES 调用只有请求 ctx
+// 兜底，于是一次搜索把整个 gRPC deadline（网关侧 5s）全部挂在拨号上；
+// 降级 LIKE 虽然忠实执行，但拿到的是已取消的 ctx，出发即死，网关 504。
+// 教训：降级机制要工作，前提是"失败要快"——慢失败会把兜底路径的
+// 时间预算一起吃光。
+//
+// 两层防线对应两类故障：
+//   - Transport 层（拨号 1s / 响应头 2s）：兜"连接层黑洞"——对端 IP 死了、
+//     网络分区、SYN 无回应。这是本次事故的病灶层，必须在 TCP 层快速失败；
+//   - ctx 层（每次调用 2s）：兜"业务级慢"——连接正常但 ES 内部慢查询/
+//     GC 停顿。WithTimeout 与上游 deadline 取较早者，不会放大预算。
+//
+// 2s 的取值依据：搜索是浏览路径，用户对搜索的耐心以秒计；网关 gRPC
+// deadline 是 5s，ES 花 2s 失败后，LIKE 兜底还有约 3s 预算——降级链路
+// 被这个配比救活。
+const (
+	// esDialTimeout 是 TCP 拨号超时：黑洞 IP 的快速失败线。
+	esDialTimeout = time.Second
+	// esHeaderTimeout 是等响应头的上限：连接已建立但对端不回包的场景。
+	esHeaderTimeout = 2 * time.Second
+	// esCallTimeout 是单次 ES 调用的总预算（含拨号+传输+服务端处理）。
+	esCallTimeout = 2 * time.Second
+)
+
+// newESTransport 带超时边界的 HTTP 传输层。go-elasticsearch 的默认
+// transport 沿用 http.DefaultTransport 的零超时拨号——对"对端已死但
+// 网络不报错"的黑洞场景毫无防御，这是必须自定义的原因。
+func newESTransport() *http.Transport {
+	return &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   esDialTimeout,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ResponseHeaderTimeout: esHeaderTimeout,
+		// 连接池参数与 http.DefaultTransport 对齐，只动超时相关字段。
+		MaxIdleConns:        100,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+}
+
+// withCallTimeout 给单次 ES 调用套上总预算。调用方（装饰器）传来的 ctx
+// 可能带着网关的 5s deadline，也可能已经死了（那调用会立刻失败，
+// 交给降级路径）——WithTimeout 取较早者，语义天然正确。
+func (s *ESSearcher) withCallTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, esCallTimeout)
+}
 
 // ProductSearcher 抽象搜索引擎的最小能力集。装饰器面向这个接口编程，
 // 单测可以用假实现注入（不用起真 ES），和 Repository 接口的用意一致。
@@ -77,13 +131,21 @@ const indexMapping = `{
 // Ping 失败直接返回错误——调用方（main）据此决定不启用搜索装饰器，
 // 整个服务降级为 LIKE，理由见文件头注释。
 func NewESSearcher(addr, index string, log *zap.Logger) (*ESSearcher, error) {
-	client, err := elasticsearch.NewClient(elasticsearch.Config{Addresses: []string{addr}})
+	client, err := elasticsearch.NewClient(elasticsearch.Config{
+		Addresses: []string{addr},
+		Transport: newESTransport(),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("elasticsearch: new client: %w", err)
 	}
 	s := &ESSearcher{client: client, index: index, log: log}
 
-	res, err := client.Ping()
+	// 启动期 Ping 同样要有超时：ES 地址配置错误（黑洞 IP）时，
+	// 没有这行的话服务启动会卡在 Ping 上直到被 K8s/人工杀掉——
+	// "ES 不可用就降级 LIKE"的自愈路径要求 Ping 必须快速给出结论。
+	pingCtx, cancel := s.withCallTimeout(context.Background())
+	res, err := client.Ping(client.Ping.WithContext(pingCtx))
+	cancel()
 	if err != nil {
 		return nil, fmt.Errorf("elasticsearch: ping: %w", err)
 	}
@@ -168,6 +230,9 @@ func (s *ESSearcher) Search(ctx context.Context, keyword string, page, pageSize 
 		pageSize = 20
 	}
 
+	ctx, cancel := s.withCallTimeout(ctx)
+	defer cancel()
+
 	query := map[string]any{
 		"_source": false,
 		"query": map[string]any{
@@ -244,6 +309,9 @@ func (s *ESSearcher) Index(ctx context.Context, p *model.Product) error {
 		return fmt.Errorf("elasticsearch: marshal doc: %w", err)
 	}
 
+	ctx, cancel := s.withCallTimeout(ctx)
+	defer cancel()
+
 	res, err := s.client.Index(s.index, bytes.NewReader(body),
 		s.client.Index.WithContext(ctx),
 		s.client.Index.WithDocumentID(strconv.FormatUint(p.ID, 10)),
@@ -261,6 +329,9 @@ func (s *ESSearcher) Index(ctx context.Context, p *model.Product) error {
 }
 
 func (s *ESSearcher) Delete(ctx context.Context, id uint64) error {
+	ctx, cancel := s.withCallTimeout(ctx)
+	defer cancel()
+
 	res, err := s.client.Delete(s.index, strconv.FormatUint(id, 10),
 		s.client.Delete.WithContext(ctx),
 		s.client.Delete.WithRefresh("true"),

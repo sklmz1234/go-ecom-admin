@@ -10,8 +10,12 @@ package repository
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -143,6 +147,40 @@ func TestDelete_ESFailureDoesNotBlock(t *testing.T) {
 	assert.Equal(t, []uint64{7}, searcher.deleted)
 }
 
+// TestESSearcher_SlowESFailsFast 是验收 8 事故（2026-09-12 实测）的回归测试：
+// ES"半死不活"（连接能建但迟迟不响应）时，Search 必须在秒级快速失败——
+// 没有双层超时之前，这个调用会一直挂到上游 gRPC deadline，把降级 LIKE
+// 的时间预算也吃光，网关 504。假 ES 永不主动响应，断言客户端 ~2s 放弃。
+func TestESSearcher_SlowESFailsFast(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 模拟"半死不活"的 ES：永不主动响应。客户端没有超时的话，
+		// 这个测试会挂到下面的 10s 兜底（事故前行为是挂到上游 deadline）。
+		// 注意 ResponseHeaderTimeout 触发后客户端不会关 TCP 连接
+		// （连接保持 active），所以服务端不能只等 ctx——否则
+		// httptest.Server.Close 会永远阻塞在等这条连接上。
+		select {
+		case <-r.Context().Done():
+		case <-time.After(10 * time.Second):
+		}
+	}))
+	defer srv.Close()
+
+	client, err := elasticsearch.NewClient(elasticsearch.Config{
+		Addresses: []string{srv.URL},
+		Transport: newESTransport(),
+	})
+	require.NoError(t, err)
+	s := &ESSearcher{client: client, index: "products", log: zaptest.NewLogger(t)}
+
+	start := time.Now()
+	_, _, err = s.Search(context.Background(), "耳机", 1, 20)
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "慢 ES 必须报错，让装饰器走降级")
+	// ResponseHeaderTimeout 2s + 少量调度余量；若退化回"挂到死"，这里会接近 10s。
+	assert.Less(t, elapsed, 5*time.Second, "ES 无响应时必须秒级失败，不能挂到上游 deadline")
+}
+
 // TestSearchByKeyword_ReordersByRecallOrder 是"召回+回表"架构的核心用例：
 // WHERE id IN (...) 不保证顺序（MockRepository 故意按主键序返回），
 // 装饰器必须把结果重排回 ES 的 _score 相关度顺序——不重排的话，
@@ -230,6 +268,22 @@ func TestSearchByKeyword_LIKEEscapesWildcards(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), total, "% 必须按字面量匹配，不能命中任何商品")
 	assert.Empty(t, products)
+}
+
+// TestSearchByKeyword_LIKEEscapeCharItself 转义符（!）自身必须按字面量匹配：
+// 名字里真带 ! 的商品能被 "!" 搜到，且不能触发 SQL 错误。
+// （转义符从 '\' 换成 '!' 的方言教训见 gorm 实现的注释。）
+func TestSearchByKeyword_LIKEEscapeCharItself(t *testing.T) {
+	repo := NewGormRepository(newSQLiteDB(t))
+	seedProduct(t, repo, "清仓!蓝牙耳机", 9900, 1)
+	seedProduct(t, repo, "机械键盘", 39900, 3)
+
+	products, total, err := repo.SearchByKeyword(context.Background(), "清仓!", 1, 20)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total)
+	require.Len(t, products, 1)
+	assert.Equal(t, "清仓!蓝牙耳机", products[0].Name)
 }
 
 // TestListByIDs 验证回表批量查询：只取目标 id，空输入短路不打 SQL。
