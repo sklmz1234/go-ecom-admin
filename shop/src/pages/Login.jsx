@@ -54,7 +54,11 @@ export default function Login() {
             </Button>
           </Form.Item>
           <div style={{ textAlign: 'center', color: '#999' }}>
-            还没有账号？<Link to="/register">去注册</Link>
+            还没有账号？
+            {/* redirect 接力：注册完自动登录后还能跳回用户最初想去的页面 */}
+            <Link to={redirect !== '/' ? `/register?redirect=${encodeURIComponent(redirect)}` : '/register'}>
+              去注册
+            </Link>
           </div>
         </Form>
       </Card>
