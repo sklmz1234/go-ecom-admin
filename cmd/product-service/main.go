@@ -107,6 +107,18 @@ func main() {
 	}
 	repo := repository.NewGormRepository(db)
 
+	// 搜索装饰器（阶段 5A）：ES 可用就把 gorm 实现包进"ES 召回 + 回表"
+	// 装饰器，SearchByKeyword 走搜索引擎；ES 连不上时不包这层，
+	// SearchByKeyword 落到 gorm 的 LIKE 兜底实现——搜索引擎是加速层
+	// 不是正确性依赖，和下面缓存装饰器的降级原则完全一致。
+	esSearcher, err := repository.NewESSearcher(cfg.Elasticsearch.Addr, cfg.Elasticsearch.Index, log)
+	if err != nil {
+		log.Warn("elasticsearch unavailable, product search falls back to MySQL LIKE", zap.Error(err))
+	} else {
+		repo = repository.NewSearchRepository(repo, esSearcher, log)
+		log.Info("elasticsearch search enabled", zap.String("addr", cfg.Elasticsearch.Addr), zap.String("index", cfg.Elasticsearch.Index))
+	}
+
 	// 缓存装饰器（阶段 2C）：Redis 可用就把 gorm 实现包进 cache-aside 装饰器，
 	// service 层拿到的仍是同一个 Repository 接口，零改动。
 	// Redis 连不上时降级为直连 MySQL——缓存是加速层不是正确性依赖，

@@ -5,6 +5,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"gorm.io/gorm"
 
@@ -19,6 +20,13 @@ type Repository interface {
 	Update(ctx context.Context, p *model.Product) error
 	Delete(ctx context.Context, id uint64) error
 	List(ctx context.Context, page, pageSize int) ([]*model.Product, int64, error)
+	// SearchByKeyword（阶段 5A）关键词搜索。gorm 实现是 LIKE 兜底；
+	// 外面包了 searchRepository 装饰器时，正常路径走 ES 召回 + 回表，
+	// 本实现只在 ES 故障时兜底（或装饰器缺装时直接顶上）。
+	SearchByKeyword(ctx context.Context, keyword string, page, pageSize int) ([]*model.Product, int64, error)
+	// ListByIDs 按 id 批量取商品，供搜索回表用。
+	// 注意不保证返回顺序——调用方负责按召回顺序重排。
+	ListByIDs(ctx context.Context, ids []uint64) ([]*model.Product, error)
 	// 阶段 3：库存扣减/回补。两个方法都返回操作后的商品（调用方需要
 	// remaining stock；DeductStock 的调用方还要 price/name 做下单快照）。
 	DeductStock(ctx context.Context, productID uint64, quantity int32) (*model.Product, error)
@@ -112,6 +120,63 @@ func (r *gormRepository) List(ctx context.Context, page, pageSize int) ([]*model
 	}
 
 	return products, total, nil
+}
+
+// SearchByKeyword 是搜索的降级实现：ES 不可用时的 MySQL LIKE 兜底。
+// 只在 name 上匹配（description 的全文检索是 ES 的活）——降级策略求
+// "搜得到"不求"搜得全"，召回率损失可接受，全站不 500 才是目标。
+//
+// LIKE 通配符转义：用户输入里的 % 和 _ 是 LIKE 的元字符，不转义的话
+// 搜 "100%" 会变成全表匹配。
+//
+// 转义符选 '!' 而不是常见的 '\'（2026-09-12 验收实测踩坑修复）：
+// MySQL 的字符串字面量里反斜杠本身是转义符，ESCAPE '\' 会把闭引号
+// 转义掉直接 1064 语法错误；而 SQLite 字符串里反斜杠是字面量，
+// ESCAPE '\' 反而合法——单测（sqlite）全绿、真库（MySQL）爆炸的
+// 经典方言陷阱。'!' 在两种方言里都没有特殊含义，是最大公约数。
+// 用 '!' 做转义符后，关键词里的反斜杠无需特殊处理（LIKE 模式里
+// 它就是字面量，参数传值也不经过字符串字面量解析）。
+func (r *gormRepository) SearchByKeyword(ctx context.Context, keyword string, page, pageSize int) ([]*model.Product, int64, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+
+	// 先转义转义符自身，再转义通配符——顺序反了会把刚生成的 !% 的
+	// 感叹号再转义一遍，模式就全乱了。
+	escaped := strings.NewReplacer(`!`, `!!`, `%`, `!%`, `_`, `!_`).Replace(keyword)
+	like := "%" + escaped + "%"
+
+	var products []*model.Product
+	var total int64
+
+	db := r.db.WithContext(ctx).Model(&model.Product{}).Where(`name LIKE ? ESCAPE '!'`, like)
+	if err := db.Count(&total).Error; err != nil {
+		return nil, 0, apperrors.Internal("failed to count products by keyword", err)
+	}
+
+	offset := (page - 1) * pageSize
+	if err := db.Offset(offset).Limit(pageSize).Find(&products).Error; err != nil {
+		return nil, 0, apperrors.Internal("failed to search products by keyword", err)
+	}
+
+	return products, total, nil
+}
+
+// ListByIDs 按 id 批量取商品，供搜索"召回+回表"的回表步骤用。
+// 返回顺序由数据库决定（通常主键序），不代表任何业务顺序——
+// 相关度排序由调用方（searchRepository）按召回 id 顺序重排。
+func (r *gormRepository) ListByIDs(ctx context.Context, ids []uint64) ([]*model.Product, error) {
+	if len(ids) == 0 {
+		return []*model.Product{}, nil
+	}
+	var products []*model.Product
+	if err := r.db.WithContext(ctx).Where("id IN ?", ids).Find(&products).Error; err != nil {
+		return nil, apperrors.Internal("failed to list products by ids", err)
+	}
+	return products, nil
 }
 
 // DeductStock 是防超卖的核心：把 CAS 下推到数据库，一条条件更新 SQL 原子完成

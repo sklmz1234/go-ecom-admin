@@ -245,6 +245,39 @@ func TestListProducts(t *testing.T) {
 	assert.Equal(t, uint64(7), resp.GetProducts()[1].GetOwnerId())
 }
 
+// TestListProducts_WithKeyword 验证阶段 5A 的分流：keyword 非空走
+// SearchByKeyword（ES 召回链路），空才走 List。mock 只设了
+// SearchByKeyword 期望——如果 service 调错方法（比如仍走 List），
+// mockery 会因意外调用直接失败。
+func TestListProducts_WithKeyword(t *testing.T) {
+	svc, repo := newTestService(t)
+	repo.EXPECT().SearchByKeyword(mock.Anything, "耳机", 1, 10).Return([]*model.Product{
+		{ID: 1, Name: "蓝牙耳机", PriceCents: 19900, Stock: 10, OwnerID: 42},
+	}, int64(1), nil)
+
+	resp, err := svc.ListProducts(context.Background(), &productpb.ListProductsRequest{
+		Page: 1, PageSize: 10, Keyword: "耳机",
+	})
+
+	require.NoError(t, err)
+	require.Len(t, resp.GetProducts(), 1)
+	assert.Equal(t, int64(1), resp.GetTotal())
+	assert.Equal(t, "蓝牙耳机", resp.GetProducts()[0].GetName())
+}
+
+// TestListProducts_WhitespaceKeyword 纯空白关键词按"无关键词"处理
+// （TrimSpace 后为空），走普通 List——空白搜索召回全表没有意义。
+func TestListProducts_WhitespaceKeyword(t *testing.T) {
+	svc, repo := newTestService(t)
+	repo.EXPECT().List(mock.Anything, 1, 10).Return([]*model.Product{}, int64(0), nil)
+
+	_, err := svc.ListProducts(context.Background(), &productpb.ListProductsRequest{
+		Page: 1, PageSize: 10, Keyword: "   ",
+	})
+
+	require.NoError(t, err)
+}
+
 // TestDeductStock_Unauthenticated 验证零信任底线同样适用于库存写路径：
 // metadata 里没有 user_id 直接 Unauthenticated，repo 零期望证明未触达存储。
 func TestDeductStock_Unauthenticated(t *testing.T) {

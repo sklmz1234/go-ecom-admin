@@ -25,6 +25,13 @@ redis:
   password: ""
   db: 0
 
+# 商品搜索引擎（阶段 5A）。容器环境里用 ELASTICSEARCH_ADDR 覆盖成 service 名。
+# 连不上时 product-service 降级为 MySQL LIKE 搜索（搜索引擎是加速层不是
+# 正确性依赖，和 Redis 缓存同一原则），所以这个地址配错不会让服务起不来。
+elasticsearch:
+  addr: http://127.0.0.1:9200
+  index: products
+
 # 开发环境用的默认 secret，生产环境务必通过 JWT_SECRET 环境变量覆盖
 # （Viper 的 AutomaticEnv 会把 "." 换成 "_"，jwt.secret -> JWT_SECRET）。
 jwt:

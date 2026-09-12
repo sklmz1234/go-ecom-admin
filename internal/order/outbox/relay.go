@@ -32,6 +32,15 @@ const (
 	// DefaultBatchSize 是单轮最多投递的消息数，防单轮拖太久；
 	// 积压大时每 tick 消化一批，逐步排空。
 	DefaultBatchSize = 20
+	// deliverTimeout 是单次投递调用的预算。为什么必须显式给：
+	// relay 的 ctx 是进程级的（main 的 signal ctx），没有任何 deadline，
+	// 而 product"半死不活"（黑洞 IP、对端卡死不回包）时 gRPC 调用会
+	// 永远阻塞——后果不只是这条消息送不出：整个 batch 卡在它后面，
+	// session 的行锁一直被持有，其他副本的 relay 也被堵死（2026-09-12
+	// 在搜索路径实测到同类事故，见 search_repository.go 的超时注释）。
+	// 3s 的依据：容器网络内健康 product 的响应是毫秒级，3s 已极度宽容；
+	// 超时按普通失败走 MarkFailed 退避，由"下一轮再来"自愈。
+	deliverTimeout = 3 * time.Second
 )
 
 // Relay 是投递循环。零依赖全局状态：tracer/meter 从 OTel 全局取
@@ -103,7 +112,7 @@ func (r *Relay) tick(ctx context.Context) {
 	defer span.End()
 
 	// 先上报积压再抢消息（此时无事务持有连接）：PENDING 总量含退避
-	// 等待中的，是"这个集群还有多少回补没送达"的真实读数。
+	// 等待中的，是"这个集群还有多少回没送达"的真实读数。
 	if n, err := r.outbox.CountPending(ctx); err == nil && r.pending != nil {
 		r.pending.Record(ctx, n)
 	}
@@ -160,7 +169,11 @@ func (r *Relay) deliver(ctx context.Context, sess *repository.OutboxSession, m *
 
 	// 系统身份：relay 是后台进程，没有真实用户，按约定注入 user_id=0。
 	// product 侧只有 RestoreStock（有 message_id 幂等背书）放行 0。
-	err := r.products.RestoreStock(identity.InjectOutgoingSystem(ctx), p.ProductID, p.Quantity, m.MessageID)
+	// 调用预算 deliverTimeout 的理由见常量注释——这是进程级 ctx 上
+	// 唯一的失败边界。
+	callCtx, cancel := context.WithTimeout(ctx, deliverTimeout)
+	err := r.products.RestoreStock(identity.InjectOutgoingSystem(callCtx), p.ProductID, p.Quantity, m.MessageID)
+	cancel()
 	if err == nil {
 		if err := sess.MarkSent(ctx, m.ID); err != nil {
 			r.log.Error("mark sent failed", zap.Uint64("outbox_id", m.ID), zap.Error(err))

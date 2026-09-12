@@ -132,6 +132,34 @@ func TestRelay_DeadAfterExhaustedRetries(t *testing.T) {
 	relay.tick(ctx)
 }
 
+// 投递调用必须带独立超时：product"半死不活"（永不主动返回）时，
+// relay 的进程级 ctx 没有 deadline，调用会永远阻塞——整个 batch 卡住、
+// session 行锁一直被持有，其他副本也被堵死。修复后期望：~3s 快速失败，
+// 按普通失败走退避（retry_count+1），消息留在 PENDING 等下一轮。
+func TestRelay_DeliverTimeout_FailsFastAndRetries(t *testing.T) {
+	relay, db, products := newRelay(t)
+	ctx := context.Background()
+	m := insertPending(t, db, "msg-1")
+
+	products.EXPECT().RestoreStock(mock.Anything, uint64(7), int32(3), "msg-1").
+		Run(func(ctx context.Context, _ uint64, _ int32, _ string) {
+			// 模拟半死不活的 product：只等 ctx，永不主动返回。
+			// relay 没给调用加超时的话，这里会挂到 go test 全局超时。
+			<-ctx.Done()
+		}).
+		Return(status.Error(codes.DeadlineExceeded, "context deadline exceeded"))
+
+	start := time.Now()
+	relay.tick(ctx)
+	elapsed := time.Since(start)
+
+	assert.Less(t, elapsed, deliverTimeout+2*time.Second,
+		"投递调用必须有独立超时，不能挂在进程级 ctx 上")
+	got := loadMessage(t, db, m.ID)
+	assert.Equal(t, model.OutboxStatusPending, got.Status)
+	assert.Equal(t, 1, got.RetryCount, "超时按普通失败计一次退避")
+}
+
 // 消息体损坏：不重试直接死信（重试一万次也不会好）。
 func TestRelay_UndecodablePayload_GoesDead(t *testing.T) {
 	relay, db, _ := newRelay(t)

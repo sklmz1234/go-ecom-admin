@@ -46,6 +46,38 @@ services:
       retries: 20
       start_period: 30s
 
+  # 商品搜索引擎（阶段 5A）：ES 单节点 + IK 中文分词器（自定义镜像，
+  # 见 deploy/elasticsearch/Dockerfile）。单节点开发形态：关安全免证书
+  # （仅本地开发，生产必须开），堆压到 512m——ES 默认堆 1G+，Windows
+  # Docker Desktop 默认资源配额下两个 Java 大户（ES+Jaeger）会互相挤爆。
+  elasticsearch:
+    build:
+      context: ./deploy/elasticsearch
+    image: go-ecom-admin/elasticsearch:${TAG:-latest}
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+      TZ: Asia/Shanghai
+    # 同 mysql/redis：daemon 重启后自愈，理由见 mysql 服务注释。
+    restart: unless-stopped
+    ports:
+      - "${ES_HOST_PORT:-9200}:9200"
+    volumes:
+      # 必须挂数据卷：ES 数据默认存在容器可写层，容器一旦被 recreate
+      # （compose up 重建依赖链等）索引就全丢——而重建后没有任何组件会
+      # 自动回填（双写只管增量，不管存量），搜索会悄悄返空直到下次 seed。
+      # 2026-09-12 实测踩中：重建 product 镜像导致 ES 被连带 recreate，
+      # 搜索 total=0。和 mysql/redis 的数据卷是同一纪律。
+      - es-data:/usr/share/elasticsearch/data
+    healthcheck:
+      # ES 启动慢（JVM + IK 词典加载），start_period 给足 60s。
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
   user-service:
     build:
       context: .
@@ -72,12 +104,16 @@ services:
       <<: *mysql-env
       # 缓存地址，覆盖 config.yaml 里的 127.0.0.1:6379
       REDIS_ADDR: redis:6379
+      # 搜索引擎地址（阶段 5A），覆盖 config.yaml 里的 http://127.0.0.1:9200
+      ELASTICSEARCH_ADDR: http://elasticsearch:9200
       TELEMETRY_OTLP_ENDPOINT: jaeger:4317
       TZ: Asia/Shanghai
     depends_on:
       mysql:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      elasticsearch:
         condition: service_healthy
     restart: unless-stopped
 
@@ -139,11 +175,15 @@ services:
       # seed 重置库表后要清商品读缓存（否则旧缓存里的数据没有 owner_id，
       # 归属校验会误判 403），所以需要 Redis 地址。
       REDIS_ADDR: redis:6379
+      # 灌完 MySQL 还要全量重建搜索索引（阶段 5A），所以需要 ES 地址。
+      ELASTICSEARCH_ADDR: http://elasticsearch:9200
       TZ: Asia/Shanghai
     depends_on:
       mysql:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      elasticsearch:
         condition: service_healthy
 
   # product-service 读缓存（阶段 2C）。不暴露宿主机端口——只有容器网络内的
@@ -212,3 +252,4 @@ services:
 volumes:
   mysql-data:
   redis-data:
+  es-data:

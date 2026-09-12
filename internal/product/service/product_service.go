@@ -3,6 +3,7 @@ package service
 
 import (
 	"context"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -63,8 +64,23 @@ func (s *Service) CreateProduct(ctx context.Context, req *productpb.CreateProduc
 	return &productpb.CreateProductResponse{Product: toProto(p)}, nil
 }
 
+// ListProducts 按 keyword 分流（阶段 5A）：
+//   - keyword 为空：普通分页列表（MySQL offset/limit），首页浏览路径；
+//   - keyword 非空：搜索（正常走 ES 召回 + 回表，ES 故障降级 LIKE，
+//     实现细节封装在 repo 层的装饰器里，本层不感知）。
+// 网关和 proto 都只传一个 keyword 字段，不知道两种路径的存在——
+// 这就是"分流收敛在 service 层"的意义：搜索实现以后换掉（比如换
+// OpenSearch），调用链上游零改动。
 func (s *Service) ListProducts(ctx context.Context, req *productpb.ListProductsRequest) (*productpb.ListProductsResponse, error) {
-	products, total, err := s.repo.List(ctx, int(req.GetPage()), int(req.GetPageSize()))
+	var products []*model.Product
+	var total int64
+	var err error
+
+	if keyword := strings.TrimSpace(req.GetKeyword()); keyword != "" {
+		products, total, err = s.repo.SearchByKeyword(ctx, keyword, int(req.GetPage()), int(req.GetPageSize()))
+	} else {
+		products, total, err = s.repo.List(ctx, int(req.GetPage()), int(req.GetPageSize()))
+	}
 	if err != nil {
 		s.log.Warn("list products failed", zap.Error(err))
 		return nil, apperrors.ToGRPCStatus(err)

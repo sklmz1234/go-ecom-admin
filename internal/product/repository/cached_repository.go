@@ -137,6 +137,18 @@ func (r *cachedRepository) List(ctx context.Context, page, pageSize int) ([]*mod
 	return r.next.List(ctx, page, pageSize)
 }
 
+// SearchByKeyword / ListByIDs（阶段 5A）同样透传：搜索结果的缓存键
+// 是 keyword × page 的笛卡尔积，比 List 更稀疏，缓存收益更低；
+// 且搜索结果还要叠加 ES 召回顺序，缓存在这层会把两种数据源的一致性
+// 问题缠在一起。搜索的加速由 ES 本身负责，不需要再加一道缓存。
+func (r *cachedRepository) SearchByKeyword(ctx context.Context, keyword string, page, pageSize int) ([]*model.Product, int64, error) {
+	return r.next.SearchByKeyword(ctx, keyword, page, pageSize)
+}
+
+func (r *cachedRepository) ListByIDs(ctx context.Context, ids []uint64) ([]*model.Product, error) {
+	return r.next.ListByIDs(ctx, ids)
+}
+
 // DeductStock / RestoreStock（阶段 3）和 Update 同一模式：先写库再删缓存。
 // 少了这一步，下单扣减后商品详情缓存里的 stock 还是旧值，最长脏读 30 分钟
 // （productCacheTTL）——这是 2C 缓存层留给 3A 的必还债务。
