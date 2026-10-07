@@ -107,6 +107,20 @@ func TestCachedRepository_GetByID_MissThenHit(t *testing.T) {
 	assert.Equal(t, int32(1), next.getCalls.Load(), "第二次读应该命中缓存，不再回源")
 }
 
+// 防雪崩：回填的 TTL 必须落在 [30min, 35min) 区间——带随机抖动而不是固定值。
+func TestCachedRepository_GetByID_TTLHasJitter(t *testing.T) {
+	next := &countingRepo{product: testProduct}
+	repo, mr := setup(t, next)
+	ctx := context.Background()
+
+	_, err := repo.GetByID(ctx, 42)
+	require.NoError(t, err)
+
+	ttl := mr.TTL(productKey(42))
+	assert.GreaterOrEqual(t, ttl, productCacheTTL, "TTL 不应低于基础值")
+	assert.Less(t, ttl, productCacheTTL+cacheTTLJitter, "TTL 不应超过基础值+抖动上限")
+}
+
 // 防穿透：查不存在的 id 会缓存空值占位符，重复查不再打 DB。
 func TestCachedRepository_GetByID_NullCaching(t *testing.T) {
 	next := &countingRepo{product: nil} // 回源永远 NotFound

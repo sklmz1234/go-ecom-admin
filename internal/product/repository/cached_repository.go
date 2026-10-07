@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -20,6 +21,11 @@ const (
 	productCachePrefix = "product:"
 
 	productCacheTTL = 30 * time.Minute
+
+	// cacheTTLJitter 防雪崩：若所有商品 key 用同一 TTL，同一批回填的 key 会在
+	// 同一时刻集体过期，回源流量同时砸向 MySQL。回填时给 TTL 加 [0, 5min)
+	// 随机增量，把过期时间打散到一段区间内。math/rand 即可，无需加密强度。
+	cacheTTLJitter = 5 * time.Minute
 
 	nullCacheTTL = time.Minute
 
@@ -40,6 +46,11 @@ func NewCachedRepository(next Repository, rdb *redis.Client) Repository {
 
 func productKey(id uint64) string {
 	return fmt.Sprintf("%s%d", productCachePrefix, id)
+}
+
+// jitteredTTL 返回 base + [0, jitter) 的随机 TTL，见 cacheTTLJitter 注释。
+func jitteredTTL(base, jitter time.Duration) time.Duration {
+	return base + time.Duration(rand.Int63n(int64(jitter)))
 }
 
 func (r *cachedRepository) GetByID(ctx context.Context, id uint64) (*model.Product, error) {
@@ -72,7 +83,7 @@ func (r *cachedRepository) GetByID(ctx context.Context, id uint64) (*model.Produ
 		}
 		// 回填缓存。Set 失败不视为错误——下次读还会回源，只是这次没加速到。
 		if data, mErr := json.Marshal(p); mErr == nil {
-			_ = r.rdb.Set(ctx, key, data, productCacheTTL).Err()
+			_ = r.rdb.Set(ctx, key, data, jitteredTTL(productCacheTTL, cacheTTLJitter)).Err()
 		}
 		return p, nil
 	})
